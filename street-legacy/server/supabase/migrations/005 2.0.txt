@@ -1,0 +1,1616 @@
+-- Street Legacy: Row Level Security Policies
+-- Migration: 005_rls_policies
+-- Description: Comprehensive RLS policies for all tables to secure data access
+
+-- =============================================================================
+-- CREATE MISSING ENUM IF NEEDED
+-- =============================================================================
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'currency_enum') THEN
+        CREATE TYPE currency_enum AS ENUM ('cash', 'bank');
+    END IF;
+END $$;
+
+-- =============================================================================
+-- HELPER FUNCTIONS
+-- =============================================================================
+
+-- Helper function to check if user is admin
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM auth.users
+    WHERE id = auth.uid()
+    AND (raw_user_meta_data->>'is_admin')::boolean = TRUE
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Helper function to get current player id (same as auth.uid() but clearer)
+CREATE OR REPLACE FUNCTION current_player_id()
+RETURNS UUID AS $$
+BEGIN
+  RETURN auth.uid();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- =============================================================================
+-- 1. PLAYERS TABLE
+-- =============================================================================
+
+ALTER TABLE players ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'players' 
+        AND policyname = 'players_select_own'
+    ) THEN
+        -- Players can read their own full profile
+        CREATE POLICY "players_select_own" ON players
+        FOR SELECT USING (id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'players' 
+        AND policyname = 'players_select_public'
+    ) THEN
+        -- Players can read limited public info of others
+        CREATE POLICY "players_select_public" ON players
+        FOR SELECT USING (
+            id != auth.uid() AND is_banned = FALSE
+        );
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'players' 
+        AND policyname = 'players_update_own'
+    ) THEN
+        -- Players can update their own profile (limited fields)
+        CREATE POLICY "players_update_own" ON players
+        FOR UPDATE USING (id = auth.uid())
+        WITH CHECK (id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'players' 
+        AND policyname = 'players_insert_service'
+    ) THEN
+        -- Insert only via functions (service role)
+        CREATE POLICY "players_insert_service" ON players
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'players' 
+        AND policyname = 'players_delete_none'
+    ) THEN
+        -- No direct delete
+        CREATE POLICY "players_delete_none" ON players
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'players' 
+        AND policyname = 'players_admin_all'
+    ) THEN
+        -- Admin can do everything
+        CREATE POLICY "players_admin_all" ON players
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 2. DISTRICTS TABLE
+-- =============================================================================
+
+ALTER TABLE districts ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'districts' 
+        AND policyname = 'districts_select_all'
+    ) THEN
+        -- Everyone can read districts
+        CREATE POLICY "districts_select_all" ON districts
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'districts' 
+        AND policyname = 'districts_admin_modify'
+    ) THEN
+        -- Only admin can modify
+        CREATE POLICY "districts_admin_modify" ON districts
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 3. PROPERTIES TABLE
+-- =============================================================================
+
+ALTER TABLE properties ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'properties' 
+        AND policyname = 'properties_select_all'
+    ) THEN
+        -- Everyone can view all properties
+        CREATE POLICY "properties_select_all" ON properties
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'properties' 
+        AND policyname = 'properties_update_owner'
+    ) THEN
+        -- Owners can update their own properties (limited fields: name, is_for_sale, sale_price)
+        CREATE POLICY "properties_update_owner" ON properties
+        FOR UPDATE USING (owner_id = auth.uid())
+        WITH CHECK (owner_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'properties' 
+        AND policyname = 'properties_insert_none'
+    ) THEN
+        -- Insert/delete via functions only
+        CREATE POLICY "properties_insert_none" ON properties
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'properties' 
+        AND policyname = 'properties_delete_none'
+    ) THEN
+        CREATE POLICY "properties_delete_none" ON properties
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'properties' 
+        AND policyname = 'properties_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "properties_admin_all" ON properties
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 4. PROPERTY UPGRADES TABLE
+-- =============================================================================
+
+ALTER TABLE property_upgrades ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'property_upgrades' 
+        AND policyname = 'property_upgrades_select_all'
+    ) THEN
+        -- Can view upgrades on any property
+        CREATE POLICY "property_upgrades_select_all" ON property_upgrades
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'property_upgrades' 
+        AND policyname = 'property_upgrades_modify_none'
+    ) THEN
+        -- Insert/update/delete via functions only
+        CREATE POLICY "property_upgrades_modify_none" ON property_upgrades
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'property_upgrades' 
+        AND policyname = 'property_upgrades_update_none'
+    ) THEN
+        CREATE POLICY "property_upgrades_update_none" ON property_upgrades
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'property_upgrades' 
+        AND policyname = 'property_upgrades_delete_none'
+    ) THEN
+        CREATE POLICY "property_upgrades_delete_none" ON property_upgrades
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'property_upgrades' 
+        AND policyname = 'property_upgrades_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "property_upgrades_admin_all" ON property_upgrades
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 5. BUSINESS TYPES TABLE (reference table)
+-- =============================================================================
+
+ALTER TABLE business_types ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_types' 
+        AND policyname = 'business_types_select_all'
+    ) THEN
+        -- Everyone can read
+        CREATE POLICY "business_types_select_all" ON business_types
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_types' 
+        AND policyname = 'business_types_admin_modify'
+    ) THEN
+        -- Only admin can modify
+        CREATE POLICY "business_types_admin_modify" ON business_types
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 6. BUSINESSES TABLE
+-- =============================================================================
+
+ALTER TABLE businesses ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'businesses' 
+        AND policyname = 'businesses_select_all'
+    ) THEN
+        -- Everyone can view all businesses
+        CREATE POLICY "businesses_select_all" ON businesses
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'businesses' 
+        AND policyname = 'businesses_update_owner'
+    ) THEN
+        -- Owners can update their own (limited via functions)
+        CREATE POLICY "businesses_update_owner" ON businesses
+        FOR UPDATE USING (owner_id = auth.uid())
+        WITH CHECK (owner_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'businesses' 
+        AND policyname = 'businesses_insert_none'
+    ) THEN
+        -- Insert/delete via functions
+        CREATE POLICY "businesses_insert_none" ON businesses
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'businesses' 
+        AND policyname = 'businesses_delete_none'
+    ) THEN
+        CREATE POLICY "businesses_delete_none" ON businesses
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'businesses' 
+        AND policyname = 'businesses_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "businesses_admin_all" ON businesses
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 7. CRIME TYPES TABLE (reference table)
+-- =============================================================================
+
+ALTER TABLE crime_types ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_types' 
+        AND policyname = 'crime_types_select_all'
+    ) THEN
+        CREATE POLICY "crime_types_select_all" ON crime_types
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_types' 
+        AND policyname = 'crime_types_admin_modify'
+    ) THEN
+        CREATE POLICY "crime_types_admin_modify" ON crime_types
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 8. CRIME LOGS TABLE
+-- =============================================================================
+
+ALTER TABLE crime_logs ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_logs' 
+        AND policyname = 'crime_logs_select_own'
+    ) THEN
+        -- Players can view their own crime attempts
+        CREATE POLICY "crime_logs_select_own" ON crime_logs
+        FOR SELECT USING (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_logs' 
+        AND policyname = 'crime_logs_select_target'
+    ) THEN
+        -- Players can view crimes against them
+        CREATE POLICY "crime_logs_select_target" ON crime_logs
+        FOR SELECT USING (target_player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_logs' 
+        AND policyname = 'crime_logs_insert_none'
+    ) THEN
+        -- Insert via functions only
+        CREATE POLICY "crime_logs_insert_none" ON crime_logs
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_logs' 
+        AND policyname = 'crime_logs_update_none'
+    ) THEN
+        -- No update or delete
+        CREATE POLICY "crime_logs_update_none" ON crime_logs
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_logs' 
+        AND policyname = 'crime_logs_delete_none'
+    ) THEN
+        CREATE POLICY "crime_logs_delete_none" ON crime_logs
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crime_logs' 
+        AND policyname = 'crime_logs_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "crime_logs_admin_all" ON crime_logs
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 9. JOB TYPES TABLE (reference table)
+-- =============================================================================
+
+ALTER TABLE job_types ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'job_types' 
+        AND policyname = 'job_types_select_all'
+    ) THEN
+        CREATE POLICY "job_types_select_all" ON job_types
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'job_types' 
+        AND policyname = 'job_types_admin_modify'
+    ) THEN
+        CREATE POLICY "job_types_admin_modify" ON job_types
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 10. JOB LOGS TABLE
+-- =============================================================================
+
+ALTER TABLE job_logs ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'job_logs' 
+        AND policyname = 'job_logs_select_own'
+    ) THEN
+        -- Players can view their own job completions
+        CREATE POLICY "job_logs_select_own" ON job_logs
+        FOR SELECT USING (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'job_logs' 
+        AND policyname = 'job_logs_insert_none'
+    ) THEN
+        -- Insert via functions only
+        CREATE POLICY "job_logs_insert_none" ON job_logs
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'job_logs' 
+        AND policyname = 'job_logs_update_none'
+    ) THEN
+        -- No update or delete
+        CREATE POLICY "job_logs_update_none" ON job_logs
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'job_logs' 
+        AND policyname = 'job_logs_delete_none'
+    ) THEN
+        CREATE POLICY "job_logs_delete_none" ON job_logs
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'job_logs' 
+        AND policyname = 'job_logs_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "job_logs_admin_all" ON job_logs
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 11. TRANSACTIONS TABLE (CRITICAL - immutable)
+-- =============================================================================
+
+ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'transactions' 
+        AND policyname = 'transactions_select_own'
+    ) THEN
+        -- Players can view their own transactions
+        CREATE POLICY "transactions_select_own" ON transactions
+        FOR SELECT USING (player_id = auth.uid() OR counterparty_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'transactions' 
+        AND policyname = 'transactions_insert_none'
+    ) THEN
+        -- Insert via functions only (SECURITY DEFINER functions)
+        CREATE POLICY "transactions_insert_none" ON transactions
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'transactions' 
+        AND policyname = 'transactions_update_none'
+    ) THEN
+        -- NO updates ever - transactions are immutable
+        CREATE POLICY "transactions_update_none" ON transactions
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'transactions' 
+        AND policyname = 'transactions_delete_none'
+    ) THEN
+        -- NO deletes ever
+        CREATE POLICY "transactions_delete_none" ON transactions
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'transactions' 
+        AND policyname = 'transactions_admin_select'
+    ) THEN
+        -- Admin can only read, not modify
+        CREATE POLICY "transactions_admin_select" ON transactions
+        FOR SELECT USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 12. PLAYER COOLDOWNS TABLE
+-- =============================================================================
+
+ALTER TABLE player_cooldowns ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_cooldowns' 
+        AND policyname = 'cooldowns_select_own'
+    ) THEN
+        -- Players can view their own cooldowns
+        CREATE POLICY "cooldowns_select_own" ON player_cooldowns
+        FOR SELECT USING (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_cooldowns' 
+        AND policyname = 'cooldowns_insert_none'
+    ) THEN
+        -- Modify via functions only
+        CREATE POLICY "cooldowns_insert_none" ON player_cooldowns
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_cooldowns' 
+        AND policyname = 'cooldowns_update_none'
+    ) THEN
+        CREATE POLICY "cooldowns_update_none" ON player_cooldowns
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_cooldowns' 
+        AND policyname = 'cooldowns_delete_none'
+    ) THEN
+        CREATE POLICY "cooldowns_delete_none" ON player_cooldowns
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_cooldowns' 
+        AND policyname = 'cooldowns_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "cooldowns_admin_all" ON player_cooldowns
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 13. BUSINESS INCOME LOGS TABLE
+-- =============================================================================
+
+ALTER TABLE business_income_logs ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_income_logs' 
+        AND policyname = 'business_income_logs_select_own'
+    ) THEN
+        -- Players can view their own income logs
+        CREATE POLICY "business_income_logs_select_own" ON business_income_logs
+        FOR SELECT USING (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_income_logs' 
+        AND policyname = 'business_income_logs_insert_none'
+    ) THEN
+        -- Modify via functions only
+        CREATE POLICY "business_income_logs_insert_none" ON business_income_logs
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_income_logs' 
+        AND policyname = 'business_income_logs_update_none'
+    ) THEN
+        CREATE POLICY "business_income_logs_update_none" ON business_income_logs
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_income_logs' 
+        AND policyname = 'business_income_logs_delete_none'
+    ) THEN
+        CREATE POLICY "business_income_logs_delete_none" ON business_income_logs
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_income_logs' 
+        AND policyname = 'business_income_logs_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "business_income_logs_admin_all" ON business_income_logs
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 14. CREWS TABLE
+-- =============================================================================
+
+ALTER TABLE crews ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crews' 
+        AND policyname = 'crews_select_all'
+    ) THEN
+        -- Everyone can view crews
+        CREATE POLICY "crews_select_all" ON crews
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crews' 
+        AND policyname = 'crews_update_leader'
+    ) THEN
+        -- Leader can update their crew
+        CREATE POLICY "crews_update_leader" ON crews
+        FOR UPDATE USING (leader_id = auth.uid())
+        WITH CHECK (leader_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crews' 
+        AND policyname = 'crews_insert_none'
+    ) THEN
+        -- Insert/delete via functions
+        CREATE POLICY "crews_insert_none" ON crews
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crews' 
+        AND policyname = 'crews_delete_none'
+    ) THEN
+        CREATE POLICY "crews_delete_none" ON crews
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crews' 
+        AND policyname = 'crews_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "crews_admin_all" ON crews
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 15. CREW MEMBERS TABLE
+-- =============================================================================
+
+ALTER TABLE crew_members ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_members' 
+        AND policyname = 'crew_members_select_all'
+    ) THEN
+        -- Everyone can view crew members
+        CREATE POLICY "crew_members_select_all" ON crew_members
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_members' 
+        AND policyname = 'crew_members_insert_none'
+    ) THEN
+        -- Modify via functions only
+        CREATE POLICY "crew_members_insert_none" ON crew_members
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_members' 
+        AND policyname = 'crew_members_update_none'
+    ) THEN
+        CREATE POLICY "crew_members_update_none" ON crew_members
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_members' 
+        AND policyname = 'crew_members_delete_none'
+    ) THEN
+        CREATE POLICY "crew_members_delete_none" ON crew_members
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_members' 
+        AND policyname = 'crew_members_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "crew_members_admin_all" ON crew_members
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 16. CREW INVITES TABLE
+-- =============================================================================
+
+ALTER TABLE crew_invites ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_invites' 
+        AND policyname = 'crew_invites_select_invited'
+    ) THEN
+        -- Players can see invites to them
+        CREATE POLICY "crew_invites_select_invited" ON crew_invites
+        FOR SELECT USING (invited_player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_invites' 
+        AND policyname = 'crew_invites_select_sent'
+    ) THEN
+        -- Crew leaders/officers can see invites they sent
+        CREATE POLICY "crew_invites_select_sent" ON crew_invites
+        FOR SELECT USING (invited_by_player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_invites' 
+        AND policyname = 'crew_invites_insert_none'
+    ) THEN
+        -- Modify via functions
+        CREATE POLICY "crew_invites_insert_none" ON crew_invites
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_invites' 
+        AND policyname = 'crew_invites_update_none'
+    ) THEN
+        CREATE POLICY "crew_invites_update_none" ON crew_invites
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_invites' 
+        AND policyname = 'crew_invites_delete_none'
+    ) THEN
+        CREATE POLICY "crew_invites_delete_none" ON crew_invites
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'crew_invites' 
+        AND policyname = 'crew_invites_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "crew_invites_admin_all" ON crew_invites
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 17. DISTRICT INFLUENCE TABLE
+-- =============================================================================
+
+ALTER TABLE district_influence ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_influence' 
+        AND policyname = 'district_influence_select_all'
+    ) THEN
+        -- Everyone can view
+        CREATE POLICY "district_influence_select_all" ON district_influence
+        FOR SELECT USING (TRUE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_influence' 
+        AND policyname = 'district_influence_insert_none'
+    ) THEN
+        -- Modify via functions only
+        CREATE POLICY "district_influence_insert_none" ON district_influence
+        FOR INSERT WITH CHECK (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_influence' 
+        AND policyname = 'district_influence_update_none'
+    ) THEN
+        CREATE POLICY "district_influence_update_none" ON district_influence
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_influence' 
+        AND policyname = 'district_influence_delete_none'
+    ) THEN
+        CREATE POLICY "district_influence_delete_none" ON district_influence
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_influence' 
+        AND policyname = 'district_influence_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "district_influence_admin_all" ON district_influence
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 18. PLAYER RELATIONSHIPS TABLE
+-- =============================================================================
+
+ALTER TABLE player_relationships ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_relationships' 
+        AND policyname = 'relationships_select_own'
+    ) THEN
+        -- Players can see their own relationships
+        CREATE POLICY "relationships_select_own" ON player_relationships
+        FOR SELECT USING (player_id = auth.uid() OR target_player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_relationships' 
+        AND policyname = 'relationships_insert_own'
+    ) THEN
+        -- Players can insert their own relationships
+        CREATE POLICY "relationships_insert_own" ON player_relationships
+        FOR INSERT WITH CHECK (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_relationships' 
+        AND policyname = 'relationships_update_own'
+    ) THEN
+        -- Players can update their own
+        CREATE POLICY "relationships_update_own" ON player_relationships
+        FOR UPDATE USING (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_relationships' 
+        AND policyname = 'relationships_delete_own'
+    ) THEN
+        -- Players can delete their own
+        CREATE POLICY "relationships_delete_own" ON player_relationships
+        FOR DELETE USING (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_relationships' 
+        AND policyname = 'relationships_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "relationships_admin_all" ON player_relationships
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 19. PLAYER MESSAGES TABLE
+-- =============================================================================
+
+ALTER TABLE player_messages ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_messages' 
+        AND policyname = 'messages_select_own'
+    ) THEN
+        -- Players can see messages to/from them
+        CREATE POLICY "messages_select_own" ON player_messages
+        FOR SELECT USING (from_player_id = auth.uid() OR to_player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_messages' 
+        AND policyname = 'messages_insert_own'
+    ) THEN
+        -- Players can send messages
+        CREATE POLICY "messages_insert_own" ON player_messages
+        FOR INSERT WITH CHECK (from_player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_messages' 
+        AND policyname = 'messages_update_read'
+    ) THEN
+        -- Recipients can mark as read
+        CREATE POLICY "messages_update_read" ON player_messages
+        FOR UPDATE USING (to_player_id = auth.uid())
+        WITH CHECK (to_player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_messages' 
+        AND policyname = 'messages_delete_none'
+    ) THEN
+        -- No delete
+        CREATE POLICY "messages_delete_none" ON player_messages
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'player_messages' 
+        AND policyname = 'messages_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "messages_admin_all" ON player_messages
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 20. DISTRICT CHAT TABLE
+-- =============================================================================
+
+ALTER TABLE district_chat ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_chat' 
+        AND policyname = 'district_chat_select_all'
+    ) THEN
+        -- Everyone can read non-deleted chat
+        CREATE POLICY "district_chat_select_all" ON district_chat
+        FOR SELECT USING (is_deleted = FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_chat' 
+        AND policyname = 'district_chat_insert_own'
+    ) THEN
+        -- Players can post
+        CREATE POLICY "district_chat_insert_own" ON district_chat
+        FOR INSERT WITH CHECK (player_id = auth.uid());
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_chat' 
+        AND policyname = 'district_chat_update_none'
+    ) THEN
+        -- No update (except admin soft delete)
+        CREATE POLICY "district_chat_update_none" ON district_chat
+        FOR UPDATE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_chat' 
+        AND policyname = 'district_chat_delete_none'
+    ) THEN
+        -- No delete
+        CREATE POLICY "district_chat_delete_none" ON district_chat
+        FOR DELETE USING (FALSE);
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'district_chat' 
+        AND policyname = 'district_chat_admin_all'
+    ) THEN
+        -- Admin full access
+        CREATE POLICY "district_chat_admin_all" ON district_chat
+        FOR ALL USING (is_admin());
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 21. MISSIONS TABLE (reference table)
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'missions') THEN
+        ALTER TABLE missions ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'missions' 
+            AND policyname = 'missions_select_all'
+        ) THEN
+            CREATE POLICY "missions_select_all" ON missions
+            FOR SELECT USING (TRUE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'missions' 
+            AND policyname = 'missions_admin_modify'
+        ) THEN
+            CREATE POLICY "missions_admin_modify" ON missions
+            FOR ALL USING (is_admin());
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 22. PLAYER MISSIONS TABLE
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'player_missions') THEN
+        ALTER TABLE player_missions ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_missions' 
+            AND policyname = 'player_missions_select_own'
+        ) THEN
+            CREATE POLICY "player_missions_select_own" ON player_missions
+            FOR SELECT USING (player_id = auth.uid());
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_missions' 
+            AND policyname = 'player_missions_insert_none'
+        ) THEN
+            CREATE POLICY "player_missions_insert_none" ON player_missions
+            FOR INSERT WITH CHECK (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_missions' 
+            AND policyname = 'player_missions_update_none'
+        ) THEN
+            CREATE POLICY "player_missions_update_none" ON player_missions
+            FOR UPDATE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_missions' 
+            AND policyname = 'player_missions_delete_none'
+        ) THEN
+            CREATE POLICY "player_missions_delete_none" ON player_missions
+            FOR DELETE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_missions' 
+            AND policyname = 'player_missions_admin_all'
+        ) THEN
+            CREATE POLICY "player_missions_admin_all" ON player_missions
+            FOR ALL USING (is_admin());
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 23. ITEMS TABLE (reference table)
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'items') THEN
+        ALTER TABLE items ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'items' 
+            AND policyname = 'items_select_all'
+        ) THEN
+            CREATE POLICY "items_select_all" ON items
+            FOR SELECT USING (TRUE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'items' 
+            AND policyname = 'items_admin_modify'
+        ) THEN
+            CREATE POLICY "items_admin_modify" ON items
+            FOR ALL USING (is_admin());
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 24. PLAYER INVENTORY TABLE
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'player_inventory') THEN
+        ALTER TABLE player_inventory ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_inventory' 
+            AND policyname = 'inventory_select_own'
+        ) THEN
+            CREATE POLICY "inventory_select_own" ON player_inventory
+            FOR SELECT USING (player_id = auth.uid());
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_inventory' 
+            AND policyname = 'inventory_insert_none'
+        ) THEN
+            CREATE POLICY "inventory_insert_none" ON player_inventory
+            FOR INSERT WITH CHECK (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_inventory' 
+            AND policyname = 'inventory_update_none'
+        ) THEN
+            CREATE POLICY "inventory_update_none" ON player_inventory
+            FOR UPDATE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_inventory' 
+            AND policyname = 'inventory_delete_none'
+        ) THEN
+            CREATE POLICY "inventory_delete_none" ON player_inventory
+            FOR DELETE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'player_inventory' 
+            AND policyname = 'inventory_admin_all'
+        ) THEN
+            CREATE POLICY "inventory_admin_all" ON player_inventory
+            FOR ALL USING (is_admin());
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 25. MARKETPLACE LISTINGS TABLE
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'marketplace_listings') THEN
+        ALTER TABLE marketplace_listings ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'marketplace_listings' 
+            AND policyname = 'listings_select_all'
+        ) THEN
+            CREATE POLICY "listings_select_all" ON marketplace_listings
+            FOR SELECT USING (TRUE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'marketplace_listings' 
+            AND policyname = 'listings_insert_own'
+        ) THEN
+            CREATE POLICY "listings_insert_own" ON marketplace_listings
+            FOR INSERT WITH CHECK (seller_id = auth.uid());
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'marketplace_listings' 
+            AND policyname = 'listings_update_own'
+        ) THEN
+            CREATE POLICY "listings_update_own" ON marketplace_listings
+            FOR UPDATE USING (seller_id = auth.uid());
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'marketplace_listings' 
+            AND policyname = 'listings_delete_none'
+        ) THEN
+            CREATE POLICY "listings_delete_none" ON marketplace_listings
+            FOR DELETE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'marketplace_listings' 
+            AND policyname = 'listings_admin_all'
+        ) THEN
+            CREATE POLICY "listings_admin_all" ON marketplace_listings
+            FOR ALL USING (is_admin());
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 26. GAME EVENTS TABLE (analytics)
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'game_events') THEN
+        ALTER TABLE game_events ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'game_events' 
+            AND policyname = 'game_events_select_own'
+        ) THEN
+            CREATE POLICY "game_events_select_own" ON game_events
+            FOR SELECT USING (player_id = auth.uid() OR target_player_id = auth.uid());
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'game_events' 
+            AND policyname = 'game_events_insert_none'
+        ) THEN
+            CREATE POLICY "game_events_insert_none" ON game_events
+            FOR INSERT WITH CHECK (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'game_events' 
+            AND policyname = 'game_events_update_none'
+        ) THEN
+            CREATE POLICY "game_events_update_none" ON game_events
+            FOR UPDATE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'game_events' 
+            AND policyname = 'game_events_delete_none'
+        ) THEN
+            CREATE POLICY "game_events_delete_none" ON game_events
+            FOR DELETE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'game_events' 
+            AND policyname = 'game_events_admin_all'
+        ) THEN
+            CREATE POLICY "game_events_admin_all" ON game_events
+            FOR ALL USING (is_admin());
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 27. ADMIN ACTIONS TABLE (audit log)
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'admin_actions') THEN
+        ALTER TABLE admin_actions ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'admin_actions' 
+            AND policyname = 'admin_actions_select_admin'
+        ) THEN
+            CREATE POLICY "admin_actions_select_admin" ON admin_actions
+            FOR SELECT USING (is_admin());
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'admin_actions' 
+            AND policyname = 'admin_actions_insert_admin'
+        ) THEN
+            CREATE POLICY "admin_actions_insert_admin" ON admin_actions
+            FOR INSERT WITH CHECK (is_admin() AND admin_user_id = auth.uid());
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'admin_actions' 
+            AND policyname = 'admin_actions_update_none'
+        ) THEN
+            CREATE POLICY "admin_actions_update_none" ON admin_actions
+            FOR UPDATE USING (FALSE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'admin_actions' 
+            AND policyname = 'admin_actions_delete_none'
+        ) THEN
+            CREATE POLICY "admin_actions_delete_none" ON admin_actions
+            FOR DELETE USING (FALSE);
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- 28. SCHEDULED EVENTS TABLE
+-- =============================================================================
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'scheduled_events') THEN
+        ALTER TABLE scheduled_events ENABLE ROW LEVEL SECURITY;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'scheduled_events' 
+            AND policyname = 'scheduled_events_select_all'
+        ) THEN
+            CREATE POLICY "scheduled_events_select_all" ON scheduled_events
+            FOR SELECT USING (TRUE);
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE tablename = 'scheduled_events' 
+            AND policyname = 'scheduled_events_admin_modify'
+        ) THEN
+            CREATE POLICY "scheduled_events_admin_modify" ON scheduled_events
+            FOR ALL USING (is_admin());
+        END IF;
+    END IF;
+END $$;
+
+-- =============================================================================
+-- RLS POLICIES COMPLETE
+-- =============================================================================
+--
+-- Security Model Summary:
+--
+-- REFERENCE TABLES (public read, admin write):
+--   districts, business_types, crime_types, job_types, missions, items, scheduled_events
+--
+-- PLAYER-OWNED DATA (own read, function write):
+--   players, properties, businesses, player_missions, player_inventory,
+--   crime_logs, job_logs, transactions, player_cooldowns, business_income_logs
+--
+-- SOCIAL DATA (various access patterns):
+--   crews - public read, leader update
+--   crew_members - public read, function write
+--   crew_invites - invited/sender read, function write
+--   player_relationships - own CRUD
+--   player_messages - own read/send, recipient update (mark read)
+--   district_chat - public read (non-deleted), own insert
+--
+-- ADMIN ONLY:
+--   admin_actions - admin read/insert only
+--
+-- IMMUTABLE (no updates/deletes ever):
+--   transactions, crime_logs, job_logs, game_events
+--
+-- All sensitive operations (purchases, crimes, jobs, trades) should go through
+-- SECURITY DEFINER functions that bypass RLS with service role access.
+--

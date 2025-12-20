@@ -1,0 +1,59 @@
+CREATE OR REPLACE FUNCTION get_player_social_stats_simple(p_player_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+AS $$
+DECLARE
+  v_result JSONB;
+BEGIN
+  IF p_player_id IS NULL THEN
+    RETURN jsonb_build_object('error','Player ID cannot be NULL');
+  END IF;
+
+  WITH stats AS (
+    -- Collect all stats in one query
+    SELECT
+      -- Friends
+      (SELECT COUNT(*) FROM get_mutual_friends(p_player_id)) as total_friends,
+      (SELECT COUNT(*) FROM get_mutual_friends(p_player_id) WHERE is_currently_online = TRUE) as online_friends,
+      
+      -- Crewmates
+      (SELECT COUNT(DISTINCT cm2.player_id)
+       FROM crew_members cm1
+       JOIN crew_members cm2 ON cm1.crew_id = cm2.crew_id
+       WHERE cm1.player_id = p_player_id
+         AND cm1.is_active = TRUE
+         AND cm2.is_active = TRUE
+         AND cm2.player_id <> p_player_id) as crewmates_count,
+      
+      -- Blocked
+      (SELECT COUNT(*)
+       FROM player_relationships
+       WHERE player_id = p_player_id 
+         AND relationship_type = 'blocked') as blocked_count,
+      
+      -- Reputation
+      (SELECT COALESCE(SUM(
+         CASE relationship_type
+           WHEN 'friend' THEN 10
+           WHEN 'positive_interaction' THEN 5
+           WHEN 'trade_partner' THEN 3
+           WHEN 'crew_mate' THEN 8
+           WHEN 'recommended' THEN 2
+           ELSE 0
+         END), 0)
+       FROM player_relationships
+       WHERE target_player_id = p_player_id
+         AND relationship_type IN ('friend', 'positive_interaction', 'trade_partner', 'crew_mate', 'recommended')) as reputation_score
+  )
+  SELECT jsonb_build_object(
+    'player_id', p_player_id,
+    'generated_at', NOW(),
+    'stats', row_to_json(stats)
+  ) INTO v_result
+  FROM stats;
+
+  RETURN v_result;
+END;
+$$;

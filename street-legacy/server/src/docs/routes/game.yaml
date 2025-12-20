@@ -1,0 +1,243 @@
+# Game Routes Documentation
+
+paths:
+  /api/game/state:
+    get:
+      tags:
+        - Game
+      summary: Get full game state
+      description: |
+        Retrieve the complete game state including player stats, available crimes,
+        districts, and active cooldowns. Called on game initialization.
+      responses:
+        '200':
+          description: Full game state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      player:
+                        $ref: '#/components/schemas/Player'
+                      currentDistrict:
+                        $ref: '#/components/schemas/District'
+                      districts:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/District'
+                      crimes:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Crime'
+                      cooldowns:
+                        type: object
+                        additionalProperties:
+                          type: string
+                          format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/game/travel:
+    post:
+      tags:
+        - Game
+      summary: Travel to a district
+      description: Move to a different district. Cannot travel while in jail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - districtId
+              properties:
+                districtId:
+                  type: integer
+                  minimum: 1
+                  maximum: 12
+                  example: 3
+      responses:
+        '200':
+          description: Travel successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Traveled to Downtown
+                      district:
+                        $ref: '#/components/schemas/District'
+        '400':
+          description: Cannot travel (in jail or invalid district)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/game/crime:
+    post:
+      tags:
+        - Game
+      summary: Commit a crime
+      description: |
+        Attempt to commit a crime. Success is based on the crime's base success rate
+        modified by district police presence, equipment bonuses, and player level.
+
+        On failure, there's a chance of being caught and sent to jail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - crimeId
+              properties:
+                crimeId:
+                  type: integer
+                  minimum: 1
+                  example: 5
+      responses:
+        '200':
+          description: Crime attempted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrimeResult'
+        '400':
+          description: Cannot commit crime (insufficient resources, cooldown, in jail)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Crime not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/game/bank/deposit:
+    post:
+      tags:
+        - Game
+      summary: Deposit cash to bank
+      description: Transfer cash from pocket to bank account. Bank balance is protected from theft.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amount
+              properties:
+                amount:
+                  type: integer
+                  minimum: 1
+                  example: 10000
+      responses:
+        '200':
+          description: Deposit successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Deposited $10000
+                      cash:
+                        type: integer
+                        example: 5000
+                      bank:
+                        type: integer
+                        example: 110000
+        '400':
+          description: Insufficient cash
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/game/bank/withdraw:
+    post:
+      tags:
+        - Game
+      summary: Withdraw cash from bank
+      description: Transfer cash from bank account to pocket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amount
+              properties:
+                amount:
+                  type: integer
+                  minimum: 1
+                  example: 5000
+      responses:
+        '200':
+          description: Withdrawal successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Withdrew $5000
+                      cash:
+                        type: integer
+                        example: 15000
+                      bank:
+                        type: integer
+                        example: 95000
+        '400':
+          description: Insufficient bank balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'

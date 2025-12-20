@@ -1,0 +1,538 @@
+/**
+ * Street Legacy - Responsive Layout Styles
+ * Mobile-first responsive utilities and layout styles
+ */
+
+/* =============================================================================
+   Safe Area Support
+   For notched devices (iPhone X and newer)
+   ============================================================================= */
+
+:root {
+  /* Safe area CSS custom properties */
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+
+  /* Layout variables */
+  --header-height: 56px;
+  --sidebar-width: 280px;
+  --sidebar-width-collapsed: 64px;
+  --feed-sidebar-width: 320px;
+  --bottom-nav-height: 64px;
+  --content-padding-mobile: 16px;
+  --content-padding-tablet: 24px;
+  --content-padding-desktop: 32px;
+  --min-touch-target: 44px;
+}
+
+/* Safe area padding utilities */
+.safe-area-top {
+  padding-top: var(--sat);
+}
+
+.safe-area-right {
+  padding-right: var(--sar);
+}
+
+.safe-area-bottom {
+  padding-bottom: var(--sab);
+}
+
+.safe-area-left {
+  padding-left: var(--sal);
+}
+
+.safe-area-all {
+  padding-top: var(--sat);
+  padding-right: var(--sar);
+  padding-bottom: var(--sab);
+  padding-left: var(--sal);
+}
+
+.safe-area-x {
+  padding-left: var(--sal);
+  padding-right: var(--sar);
+}
+
+.safe-area-y {
+  padding-top: var(--sat);
+  padding-bottom: var(--sab);
+}
+
+/* =============================================================================
+   Touch Target Sizes
+   Ensuring accessible touch targets
+   ============================================================================= */
+
+.touch-target {
+  min-width: var(--min-touch-target);
+  min-height: var(--min-touch-target);
+}
+
+.touch-target-sm {
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.touch-target-lg {
+  min-width: 56px;
+  min-height: 56px;
+}
+
+/* Touch manipulation for smooth scrolling */
+.touch-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Disable touch callout on interactive elements */
+.no-callout {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* =============================================================================
+   Scrollbar Styling
+   Custom scrollbar for webkit browsers
+   ============================================================================= */
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.5) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.5);
+  border-radius: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(100, 116, 139, 0.7);
+}
+
+/* Hide scrollbar but allow scroll */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* =============================================================================
+   Layout Utilities
+   Common layout patterns
+   ============================================================================= */
+
+/* Full viewport height accounting for mobile browser chrome */
+.h-screen-safe {
+  height: 100vh;
+  height: 100dvh; /* Dynamic viewport height */
+}
+
+.min-h-screen-safe {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Container with layout margins */
+.layout-content {
+  margin-top: calc(var(--header-height) + var(--sat));
+}
+
+@media (max-width: 767px) {
+  .layout-content {
+    margin-bottom: calc(var(--bottom-nav-height) + var(--sab));
+    padding-left: var(--content-padding-mobile);
+    padding-right: var(--content-padding-mobile);
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .layout-content {
+    padding-left: var(--content-padding-tablet);
+    padding-right: var(--content-padding-tablet);
+  }
+}
+
+@media (min-width: 1024px) {
+  .layout-content {
+    margin-left: var(--sidebar-width);
+    padding-left: var(--content-padding-desktop);
+    padding-right: var(--content-padding-desktop);
+  }
+
+  .layout-content.sidebar-collapsed {
+    margin-left: var(--sidebar-width-collapsed);
+  }
+}
+
+/* =============================================================================
+   Mobile Navigation
+   Bottom navigation styles
+   ============================================================================= */
+
+.mobile-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--bottom-nav-height) + var(--sab));
+  padding-bottom: var(--sab);
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(51, 65, 85, 0.5);
+  z-index: 30;
+}
+
+.mobile-nav-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  height: var(--bottom-nav-height);
+}
+
+.mobile-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 100%;
+  color: rgba(148, 163, 184, 0.8);
+  transition: color 0.15s;
+}
+
+.mobile-nav-item:active {
+  transform: scale(0.95);
+}
+
+.mobile-nav-item.active {
+  color: #f59e0b;
+}
+
+.mobile-nav-label {
+  font-size: 10px;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* =============================================================================
+   Header Styles
+   ============================================================================= */
+
+.app-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--header-height) + var(--sat));
+  padding-top: var(--sat);
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+  z-index: 30;
+}
+
+.app-header-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--header-height);
+  padding: 0 16px;
+}
+
+/* =============================================================================
+   Sidebar Styles
+   ============================================================================= */
+
+.app-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  padding-top: calc(var(--header-height) + var(--sat));
+  background: rgba(15, 23, 42, 0.98);
+  border-right: 1px solid rgba(51, 65, 85, 0.5);
+  z-index: 20;
+  transform: translateX(-100%);
+  transition: transform 0.3s ease, width 0.3s ease;
+}
+
+.app-sidebar.open {
+  transform: translateX(0);
+}
+
+@media (min-width: 1024px) {
+  .app-sidebar {
+    transform: translateX(0);
+  }
+
+  .app-sidebar.collapsed {
+    width: var(--sidebar-width-collapsed);
+  }
+}
+
+/* Sidebar overlay (mobile) */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 40;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s, visibility 0.3s;
+}
+
+.sidebar-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* =============================================================================
+   Card and Panel Styles
+   ============================================================================= */
+
+.card {
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 12px;
+}
+
+.card-hover {
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+@media (max-width: 767px) {
+  .card {
+    border-radius: 8px;
+  }
+}
+
+/* =============================================================================
+   Responsive Grid Utilities
+   ============================================================================= */
+
+.grid-responsive {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(1, 1fr);
+}
+
+@media (min-width: 640px) {
+  .grid-responsive {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .grid-responsive {
+    gap: 20px;
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1280px) {
+  .grid-responsive {
+    gap: 24px;
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Auto-fit grid */
+.grid-auto-fit {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+/* =============================================================================
+   Text Utilities
+   ============================================================================= */
+
+/* Truncate text with ellipsis */
+.truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.truncate-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Responsive text sizes */
+.text-responsive-sm {
+  font-size: 12px;
+}
+
+.text-responsive-base {
+  font-size: 14px;
+}
+
+.text-responsive-lg {
+  font-size: 16px;
+}
+
+@media (min-width: 768px) {
+  .text-responsive-sm {
+    font-size: 13px;
+  }
+
+  .text-responsive-base {
+    font-size: 15px;
+  }
+
+  .text-responsive-lg {
+    font-size: 18px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .text-responsive-sm {
+    font-size: 14px;
+  }
+
+  .text-responsive-base {
+    font-size: 16px;
+  }
+
+  .text-responsive-lg {
+    font-size: 20px;
+  }
+}
+
+/* =============================================================================
+   Animation Utilities
+   ============================================================================= */
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Slide animations */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideLeft {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideRight {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+.animate-slide-down {
+  animation: slideDown 0.3s ease-out;
+}
+
+.animate-slide-left {
+  animation: slideLeft 0.3s ease-out;
+}
+
+.animate-slide-right {
+  animation: slideRight 0.3s ease-out;
+}
+
+/* =============================================================================
+   Focus Styles
+   Accessible focus indicators
+   ============================================================================= */
+
+.focus-ring {
+  outline: none;
+}
+
+.focus-ring:focus-visible {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.5);
+}
+
+/* =============================================================================
+   Print Styles
+   ============================================================================= */
+
+@media print {
+  .app-header,
+  .app-sidebar,
+  .mobile-nav {
+    display: none !important;
+  }
+
+  .layout-content {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}

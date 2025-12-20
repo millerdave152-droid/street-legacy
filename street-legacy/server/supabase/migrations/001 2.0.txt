@@ -1,0 +1,537 @@
+-- Street Legacy: Fixes and Constraints Migration
+-- Migration: 002_fixes_and_constraints
+-- Description: Adds missing constraints, indexes, initial data, and improves trigger functions
+-- Depends on: 001_core_tables
+
+BEGIN;
+
+-- =============================================================================
+-- 1. ADD MISSING FOREIGN KEY CONSTRAINT FOR AUTH USERS
+-- =============================================================================
+
+-- Ensure auth.users exists and we have permission
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables 
+    WHERE table_schema = 'auth' AND table_name = 'users'
+  ) THEN
+    BEGIN
+      ALTER TABLE players
+        ADD CONSTRAINT fk_players_auth_user
+        FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
+      
+      RAISE NOTICE 'Added foreign key constraint fk_players_auth_user';
+    EXCEPTION WHEN duplicate_object THEN
+      RAISE NOTICE 'Foreign key constraint fk_players_auth_user already exists';
+    END;
+  ELSE
+    RAISE WARNING 'auth.users table not found. Skipping foreign key constraint.';
+  END IF;
+END $$;
+
+-- =============================================================================
+-- 2. ADD MISSING INDEXES FOR PERFORMANCE (NO TEMPORAL PREDICATES)
+-- =============================================================================
+
+-- For mortgage-related queries
+CREATE INDEX IF NOT EXISTS idx_properties_mortgaged 
+ON properties(is_mortgaged);
+
+-- For properties in poor condition (maintenance needed)
+CREATE INDEX IF NOT EXISTS idx_properties_condition 
+ON properties(condition);
+
+-- For tax collection queries (simple index on last_tax_paid_at)
+CREATE INDEX IF NOT EXISTS idx_properties_last_tax_paid 
+ON properties(last_tax_paid_at);
+
+-- Indexes for player reputation queries
+CREATE INDEX IF NOT EXISTS idx_players_rep_crime 
+ON players(rep_crime);
+
+CREATE INDEX IF NOT EXISTS idx_players_rep_business 
+ON players(rep_business);
+
+CREATE INDEX IF NOT EXISTS idx_players_rep_family 
+ON players(rep_family);
+
+-- Index for player energy
+CREATE INDEX IF NOT EXISTS idx_players_energy 
+ON players(energy);
+
+-- Index for player level
+CREATE INDEX IF NOT EXISTS idx_players_level 
+ON players(level);
+
+-- Index for properties with businesses
+CREATE INDEX IF NOT EXISTS idx_properties_has_business 
+ON properties(has_business);
+
+-- Index for property heat level
+CREATE INDEX IF NOT EXISTS idx_properties_heat 
+ON properties(heat_level);
+
+-- Index for property for sale status
+CREATE INDEX IF NOT EXISTS idx_properties_for_sale 
+ON properties(is_for_sale);
+
+-- Index for property type
+CREATE INDEX IF NOT EXISTS idx_properties_type 
+ON properties(property_type);
+
+-- =============================================================================
+-- 3. INSERT INITIAL DISTRICT DATA (IF NOT EXISTS)
+-- =============================================================================
+
+INSERT INTO districts (
+  id, 
+  name, 
+  description, 
+  total_parcels, 
+  difficulty, 
+  base_property_price, 
+  economy_level,
+  police_presence,
+  crime_rate,
+  is_starter_district,
+  created_at,
+  updated_at
+) VALUES
+  (
+    'scarborough', 
+    'Scarborough', 
+    'A suburban district known for its diversity and opportunities for newcomers. Lower risk with steady growth potential.',
+    250, 
+    1, 
+    50000,
+    65,
+    30,
+    40,
+    TRUE,
+    NOW(),
+    NOW()
+  ),
+  (
+    'downtown', 
+    'Downtown Core', 
+    'The economic heart of the city. High property values with intense competition and police surveillance.',
+    150, 
+    4, 
+    300000,
+    90,
+    80,
+    60,
+    TRUE,
+    NOW(),
+    NOW()
+  ),
+  (
+    'liberty', 
+    'Liberty Village', 
+    'A revitalized industrial area turned trendy neighborhood. Balanced risk-reward ratio.',
+    180, 
+    2, 
+    100000,
+    75,
+    50,
+    45,
+    TRUE,
+    NOW(),
+    NOW()
+  ),
+  (
+    'kensington', 
+    'Kensington Market', 
+    'Bohemian district with tight-knit community. Great for unconventional business opportunities.',
+    120, 
+    3, 
+    200000,
+    70,
+    40,
+    55,
+    FALSE,
+    NOW(),
+    NOW()
+  ),
+  (
+    'danforth', 
+    'The Danforth', 
+    'Historic district with strong community ties. High police presence but lucrative established businesses.',
+    100, 
+    3, 
+    250000,
+    80,
+    70,
+    35,
+    FALSE,
+    NOW(),
+    NOW()
+  ),
+  (
+    'jane_finch', 
+    'Jane and Finch', 
+    'Notorious for high crime but equally high rewards. Not for the faint-hearted.',
+    80, 
+    5, 
+    75000,
+    40,
+    30,
+    85,
+    FALSE,
+    NOW(),
+    NOW()
+  ),
+  (
+    'distillery', 
+    'Distillery District', 
+    'Upscale tourist area with premium property values. High security but massive profits.',
+    60, 
+    4, 
+    500000,
+    95,
+    90,
+    20,
+    FALSE,
+    NOW(),
+    NOW()
+  )
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  description = EXCLUDed.description,
+  difficulty = EXCLUDED.difficulty,
+  base_property_price = EXCLUDED.base_property_price,
+  economy_level = EXCLUDED.economy_level,
+  police_presence = EXCLUDED.police_presence,
+  crime_rate = EXCLUDED.crime_rate,
+  updated_at = NOW();
+
+-- =============================================================================
+-- 4. IMPROVE TRIGGER FUNCTIONS WITH BETTER ERROR HANDLING
+-- =============================================================================
+
+-- Drop existing triggers first if they exist
+DROP TRIGGER IF EXISTS update_parcels_claimed ON properties CASCADE;
+DROP TRIGGER IF EXISTS update_properties_owned ON properties CASCADE;
+DROP TRIGGER IF EXISTS handle_property_insert_trigger ON properties CASCADE;
+
+-- Improved function for district parcels tracking
+CREATE OR REPLACE FUNCTION update_district_parcels_claimed()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- If this is an UPDATE
+  IF TG_OP = 'UPDATE' THEN
+    -- Owner changed from NULL to player (property claimed)
+    IF OLD.owner_id IS NULL AND NEW.owner_id IS NOT NULL THEN
+      UPDATE districts
+      SET parcels_claimed = parcels_claimed + 1
+      WHERE id = NEW.district_id;
+    
+    -- Owner changed from player to NULL (property released)
+    ELSIF OLD.owner_id IS NOT NULL AND NEW.owner_id IS NULL THEN
+      UPDATE districts
+      SET parcels_claimed = parcels_claimed - 1
+      WHERE id = NEW.district_id;
+    
+    -- Property changed districts AND has an owner
+    ELSIF OLD.district_id IS DISTINCT FROM NEW.district_id AND NEW.owner_id IS NOT NULL THEN
+      -- Decrement old district
+      UPDATE districts 
+      SET parcels_claimed = GREATEST(0, parcels_claimed - 1)
+      WHERE id = OLD.district_id;
+      
+      -- Increment new district
+      UPDATE districts 
+      SET parcels_claimed = parcels_claimed + 1 
+      WHERE id = NEW.district_id;
+    END IF;
+  
+  -- If this is an INSERT
+  ELSIF TG_OP = 'INSERT' AND NEW.owner_id IS NOT NULL THEN
+    UPDATE districts
+    SET parcels_claimed = parcels_claimed + 1
+    WHERE id = NEW.district_id;
+  
+  -- If this is a DELETE
+  ELSIF TG_OP = 'DELETE' AND OLD.owner_id IS NOT NULL THEN
+    UPDATE districts
+    SET parcels_claimed = GREATEST(0, parcels_claimed - 1)
+    WHERE id = OLD.district_id;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE WARNING 'Error in update_district_parcels_claimed (Operation: %): %', TG_OP, SQLERRM;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+-- Improved function for player properties count
+CREATE OR REPLACE FUNCTION update_player_properties_owned()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- If this is an UPDATE
+  IF TG_OP = 'UPDATE' THEN
+    -- Decrease count for old owner
+    IF OLD.owner_id IS NOT NULL AND OLD.owner_id IS DISTINCT FROM NEW.owner_id THEN
+      UPDATE players
+      SET properties_owned = GREATEST(0, properties_owned - 1)
+      WHERE id = OLD.owner_id;
+    END IF;
+
+    -- Increase count for new owner
+    IF NEW.owner_id IS NOT NULL AND OLD.owner_id IS DISTINCT FROM NEW.owner_id THEN
+      UPDATE players
+      SET properties_owned = properties_owned + 1
+      WHERE id = NEW.owner_id;
+    END IF;
+  
+  -- If this is an INSERT with owner
+  ELSIF TG_OP = 'INSERT' AND NEW.owner_id IS NOT NULL THEN
+    UPDATE players
+    SET properties_owned = properties_owned + 1
+    WHERE id = NEW.owner_id;
+  
+  -- If this is a DELETE with owner
+  ELSIF TG_OP = 'DELETE' AND OLD.owner_id IS NOT NULL THEN
+    UPDATE players
+    SET properties_owned = GREATEST(0, properties_owned - 1)
+    WHERE id = OLD.owner_id;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE WARNING 'Error in update_player_properties_owned (Operation: %): %', TG_OP, SQLERRM;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+-- Recreate triggers
+CREATE TRIGGER update_parcels_claimed
+  AFTER INSERT OR UPDATE OF owner_id, district_id OR DELETE ON properties
+  FOR EACH ROW
+  EXECUTE FUNCTION update_district_parcels_claimed();
+
+CREATE TRIGGER update_properties_owned
+  AFTER INSERT OR UPDATE OF owner_id OR DELETE ON properties
+  FOR EACH ROW
+  EXECUTE FUNCTION update_player_properties_owned();
+
+-- =============================================================================
+-- 5. ADDITIONAL VALIDATION CONSTRAINTS
+-- =============================================================================
+
+-- Drop existing constraint if it exists and create a new one
+DO $$
+BEGIN
+  -- Check if constraint already exists
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'chk_energy_not_exceeded_new' 
+    AND table_name = 'players'
+  ) THEN
+    ALTER TABLE players DROP CONSTRAINT chk_energy_not_exceeded_new;
+  END IF;
+END $$;
+
+-- Add constraint with NOT VALID to avoid immediate validation of existing data
+ALTER TABLE players
+  ADD CONSTRAINT chk_energy_not_exceeded_new
+  CHECK (energy <= max_energy)
+  NOT VALID;
+
+-- Drop existing constraint if it exists
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'chk_value_consistency' 
+    AND table_name = 'properties'
+  ) THEN
+    ALTER TABLE properties DROP CONSTRAINT chk_value_consistency;
+  END IF;
+END $$;
+
+-- Ensure property values are consistent (allow for depreciation and appreciation)
+ALTER TABLE properties
+  ADD CONSTRAINT chk_value_consistency
+  CHECK (
+    current_value >= base_value * 0.1 
+    AND current_value <= base_value * 10
+    AND current_value > 0
+  )
+  NOT VALID;
+
+-- =============================================================================
+-- 6. HELPER VIEWS FOR ADMINISTRATION
+-- =============================================================================
+
+-- View for district overview
+CREATE OR REPLACE VIEW district_overview AS
+SELECT 
+  d.id,
+  d.name,
+  d.difficulty,
+  d.total_parcels,
+  d.parcels_claimed,
+  ROUND((d.parcels_claimed::DECIMAL / d.total_parcels) * 100, 1) as claimed_percentage,
+  d.base_property_price,
+  d.economy_level,
+  d.police_presence,
+  d.crime_rate,
+  d.is_starter_district,
+  COUNT(DISTINCT p.owner_id) as unique_owners,
+  COUNT(p.id) FILTER (WHERE p.is_for_sale = TRUE) as properties_for_sale,
+  COUNT(p.id) FILTER (WHERE p.property_type != 'empty') as developed_properties,
+  COALESCE(AVG(p.current_value), 0)::BIGINT as avg_property_value
+FROM districts d
+LEFT JOIN properties p ON d.id = p.district_id
+GROUP BY d.id, d.name, d.difficulty, d.total_parcels, d.parcels_claimed, 
+         d.base_property_price, d.economy_level, d.police_presence, 
+         d.crime_rate, d.is_starter_district;
+
+-- View for player property portfolio
+CREATE OR REPLACE VIEW player_portfolio AS
+SELECT 
+  pl.id as player_id,
+  pl.username,
+  pl.display_name,
+  pl.level,
+  pl.cash_balance + pl.bank_balance as total_wealth,
+  COUNT(p.id) as total_properties,
+  COALESCE(SUM(p.current_value), 0) as total_property_value,
+  COALESCE(SUM(p.current_value) FILTER (WHERE p.is_mortgaged = TRUE), 0) as mortgaged_value,
+  COUNT(p.id) FILTER (WHERE p.is_for_sale = TRUE) as properties_for_sale,
+  COUNT(p.id) FILTER (WHERE p.has_business = TRUE) as businesses,
+  COUNT(p.id) FILTER (WHERE p.property_type = 'residential') as residential,
+  COUNT(p.id) FILTER (WHERE p.property_type = 'commercial') as commercial,
+  COUNT(p.id) FILTER (WHERE p.property_type = 'industrial') as industrial,
+  STRING_AGG(DISTINCT d.name, ', ' ORDER BY d.name) as districts_owned_in
+FROM players pl
+LEFT JOIN properties p ON pl.id = p.owner_id
+LEFT JOIN districts d ON p.district_id = d.id
+GROUP BY pl.id, pl.username, pl.display_name, pl.level, pl.cash_balance, pl.bank_balance;
+
+-- View for high risk properties (no temporal predicates)
+CREATE OR REPLACE VIEW high_risk_properties AS
+SELECT 
+  p.id,
+  p.name,
+  p.district_id,
+  d.name as district_name,
+  p.owner_id,
+  pl.username as owner_username,
+  p.property_type,
+  p.current_value,
+  p.heat_level,
+  p.has_business,
+  p.is_for_sale,
+  p.condition,
+  p.last_tax_paid_at,
+  CASE 
+    WHEN p.last_tax_paid_at IS NULL THEN 'Never'
+    WHEN p.last_tax_paid_at < CURRENT_DATE - INTERVAL '30 days' THEN 'Overdue'
+    ELSE 'Current'
+  END as tax_status
+FROM properties p
+JOIN districts d ON p.district_id = d.id
+LEFT JOIN players pl ON p.owner_id = pl.id
+WHERE p.heat_level > 70 OR p.condition < 30;
+
+-- =============================================================================
+-- 7. AUDIT TABLE FOR PROPERTY OWNERSHIP CHANGES
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS property_ownership_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  property_id UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  previous_owner_id UUID REFERENCES players(id),
+  new_owner_id UUID REFERENCES players(id),
+  transaction_type VARCHAR(20) CHECK (transaction_type IN ('purchase', 'auction', 'confiscation', 'gift', 'sale', 'transfer')),
+  transaction_amount BIGINT,
+  recorded_at TIMESTAMPTZ DEFAULT NOW(),
+  recorded_by UUID REFERENCES players(id),
+  notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ownership_history_property ON property_ownership_history(property_id);
+CREATE INDEX IF NOT EXISTS idx_ownership_history_new_owner ON property_ownership_history(new_owner_id);
+CREATE INDEX IF NOT EXISTS idx_ownership_history_date ON property_ownership_history(recorded_at);
+
+-- Trigger to record ownership changes
+CREATE OR REPLACE FUNCTION record_ownership_change()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.owner_id IS DISTINCT FROM NEW.owner_id THEN
+    INSERT INTO property_ownership_history (
+      property_id,
+      previous_owner_id,
+      new_owner_id,
+      transaction_type,
+      recorded_at
+    ) VALUES (
+      NEW.id,
+      OLD.owner_id,
+      NEW.owner_id,
+      CASE 
+        WHEN NEW.purchase_price IS NOT NULL AND NEW.owner_id IS NOT NULL THEN 'purchase'
+        WHEN NEW.owner_id IS NULL THEN 'confiscation'
+        ELSE 'transfer'
+      END,
+      NOW()
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS record_ownership_change_trigger ON properties;
+
+CREATE TRIGGER record_ownership_change_trigger
+  AFTER UPDATE OF owner_id ON properties
+  FOR EACH ROW
+  WHEN (OLD.owner_id IS DISTINCT FROM NEW.owner_id)
+  EXECUTE FUNCTION record_ownership_change();
+
+-- =============================================================================
+-- 8. SYNCHRONIZE COUNTERS FOR EXISTING DATA
+-- =============================================================================
+
+-- Update district parcels_claimed from existing properties
+UPDATE districts d
+SET parcels_claimed = (
+  SELECT COUNT(*)
+  FROM properties p
+  WHERE p.district_id = d.id AND p.owner_id IS NOT NULL
+)
+WHERE EXISTS (SELECT 1 FROM properties p2 WHERE p2.district_id = d.id);
+
+-- Update player properties_owned from existing properties
+UPDATE players pl
+SET properties_owned = (
+  SELECT COUNT(*)
+  FROM properties p
+  WHERE p.owner_id = pl.id
+)
+WHERE EXISTS (SELECT 1 FROM properties p2 WHERE p2.owner_id = pl.id);
+
+COMMIT;
+
+-- =============================================================================
+-- MIGRATION COMPLETE MESSAGE
+-- =============================================================================
+
+DO $$
+BEGIN
+  RAISE NOTICE 'Migration 002 completed successfully.';
+  RAISE NOTICE '- Added/verified foreign key constraint for auth.users';
+  RAISE NOTICE '- Added 11 performance indexes (no temporal predicates)';
+  RAISE NOTICE '- Inserted/updated 7 district records';
+  RAISE NOTICE '- Improved trigger functions with error handling';
+  RAISE NOTICE '- Created 3 administrative views';
+  RAISE NOTICE '- Added property ownership audit trail';
+  RAISE NOTICE '- Synchronized counters for existing data';
+  RAISE NOTICE '- Added validation constraints (NOT VALID mode)';
+END $$;

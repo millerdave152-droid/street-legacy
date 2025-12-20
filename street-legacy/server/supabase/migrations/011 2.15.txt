@@ -1,0 +1,692 @@
+-- =============================================================================
+-- RECOMMEND CREWS
+-- Get personalized crew recommendations based on player's stats and preferences
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION recommend_crews(
+  p_limit INT DEFAULT 10,
+  p_include_full BOOLEAN DEFAULT FALSE,
+  p_min_level INT DEFAULT 1,
+  p_max_level INT DEFAULT NULL
+)
+RETURNS TABLE (
+  crew_id UUID,
+  crew_name VARCHAR,
+  crew_tag VARCHAR,
+  description TEXT,
+  leader_username VARCHAR,
+  home_district_name VARCHAR,
+  level INT,
+  member_count INT,
+  max_members INT,
+  vacancy_percent NUMERIC,
+  reputation INT,
+  wars_won INT,
+  wars_lost INT,
+  win_rate NUMERIC,
+  avg_member_level NUMERIC,
+  recruitment_status VARCHAR,
+  match_score NUMERIC,
+  match_reasons TEXT[]
+) AS $$
+DECLARE
+  v_player_id UUID;
+  v_player RECORD;
+  v_player_level INT;
+  v_player_home_district VARCHAR;
+  v_online_threshold TIMESTAMPTZ := NOW() - INTERVAL '5 minutes';
+BEGIN
+  -- Get current player
+  v_player_id := current_player_id();
+  
+  IF v_player_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+  
+  -- Get player details
+  SELECT level, home_district_id INTO v_player_level, v_player_home_district
+  FROM players WHERE id = v_player_id;
+  
+  -- Check if player is already in a crew
+  IF EXISTS (SELECT 1 FROM crew_members WHERE player_id = v_player_id AND is_active = TRUE) THEN
+    RAISE EXCEPTION 'You are already in a crew. Leave your current crew first.';
+  END IF;
+  
+  RETURN QUERY
+  WITH crew_stats AS (
+    SELECT 
+      c.id,
+      c.name,
+      c.tag,
+      c.description,
+      p.username AS leader_username,
+      d.name AS home_district_name,
+      c.level AS crew_level,
+      c.member_count,
+      c.max_members,
+      c.reputation,
+      c.wars_won,
+      c.wars_lost,
+      c.is_recruiting,
+      c.home_district_id,
+      c.created_at,
+      -- Calculate win rate
+      CASE 
+        WHEN c.wars_won + c.wars_lost > 0 
+        THEN ROUND((c.wars_won::NUMERIC / (c.wars_won + c.wars_lost) * 100), 1)
+        ELSE 0 
+      END AS win_rate,
+      -- Calculate average member level
+      (
+        SELECT COALESCE(ROUND(AVG(p2.level), 1), 0)
+        FROM crew_members cm2
+        JOIN players p2 ON p2.id = cm2.player_id
+        WHERE cm2.crew_id = c.id AND cm2.is_active = TRUE
+      ) AS avg_member_level,
+      -- Count active/online members
+      (
+        SELECT COUNT(*)
+        FROM crew_members cm2
+        JOIN players p2 ON p2.id = cm2.player_id
+        WHERE cm2.crew_id = c.id 
+        AND cm2.is_active = TRUE
+        AND p2.updated_at > v_online_threshold
+      ) AS online_members,
+      -- Get most common timezone (if available)
+      (
+        SELECT MODE() WITHIN GROUP (ORDER BY EXTRACT(HOUR FROM p2.timezone_offset))
+        FROM crew_members cm2
+        JOIN players p2 ON p2.id = cm2.player_id
+        WHERE cm2.crew_id = c.id AND cm2.is_active = TRUE
+        AND p2.timezone_offset IS NOT NULL
+      ) AS common_timezone
+    FROM crews c
+    JOIN players p ON p.id = c.leader_id
+    LEFT JOIN districts d ON d.id = c.home_district_id
+    WHERE c.is_active = TRUE
+    AND c.is_recruiting = TRUE
+    AND c.level >= p_min_level
+    AND (p_max_level IS NULL OR c.level <= p_max_level)
+    AND (p_include_full OR c.member_count < c.max_members)
+  ),
+  match_scores AS (
+    SELECT 
+      cs.*,
+      -- Base match score calculation
+      0.0 AS base_score,
+      ARRAY[]::TEXT[] AS match_reasons
+    FROM crew_stats cs
+  ),
+  scored_crews AS (
+    SELECT 
+      ms.*,
+      -- Calculate final match score with weighted factors
+      (
+        -- Factor 1: Level compatibility (30% weight)
+        (CASE 
+          WHEN ABS(ms.crew_level - v_player_level) <= 5 
+          THEN 30 - (ABS(ms.crew_level - v_player_level) * 2)
+          ELSE 0 
+        END) +
+        -- Factor 2: District match (20% weight)
+        (CASE 
+          WHEN ms.home_district_id = v_player_home_district 
+          THEN 20 
+          ELSE 0 
+        END) +
+        -- Factor 3: Member capacity (15% weight)
+        (CASE 
+          WHEN ms.max_members - ms.member_count >= 5 
+          THEN 15 
+          WHEN ms.max_members - ms.member_count >= 3 
+          THEN 10
+          WHEN ms.max_members - ms.member_count >= 1 
+          THEN 5
+          ELSE 0 
+        END) +
+        -- Factor 4: Activity level (15% weight)
+        (CASE 
+          WHEN ms.online_members::FLOAT / ms.member_count >= 0.5 
+          THEN 15 
+          WHEN ms.online_members::FLOAT / ms.member_count >= 0.3 
+          THEN 10
+          WHEN ms.online_members::FLOAT / ms.member_count >= 0.1 
+          THEN 5
+          ELSE 0 
+        END) +
+        -- Factor 5: Reputation (10% weight, scaled)
+        (LEAST(ms.reputation, 100) * 0.1) +
+        -- Factor 6: Win rate (10% weight, scaled)
+        (ms.win_rate * 0.1)
+      ) AS match_score
+    FROM match_scores ms
+  ),
+  ranked_crews AS (
+    SELECT 
+      sc.*,
+      ROW_NUMBER() OVER (ORDER BY sc.match_score DESC, sc.reputation DESC, sc.created_at DESC) AS rank
+    FROM scored_crews sc
+    WHERE sc.match_score > 0  -- Only show crews with some match
+  )
+  SELECT 
+    rc.id AS crew_id,
+    rc.name AS crew_name,
+    rc.tag AS crew_tag,
+    rc.description,
+    rc.leader_username,
+    rc.home_district_name,
+    rc.crew_level AS level,
+    rc.member_count,
+    rc.max_members,
+    -- Calculate vacancy percentage
+    ROUND(((rc.max_members - rc.member_count)::NUMERIC / rc.max_members * 100), 1) AS vacancy_percent,
+    rc.reputation,
+    rc.wars_won,
+    rc.wars_lost,
+    rc.win_rate,
+    rc.avg_member_level,
+    -- Recruitment status description
+    CASE 
+      WHEN rc.max_members - rc.member_count >= 5 THEN 'High Vacancy'
+      WHEN rc.max_members - rc.member_count >= 3 THEN 'Moderate Vacancy'
+      WHEN rc.max_members - rc.member_count >= 1 THEN 'Low Vacancy'
+      ELSE 'Almost Full'
+    END AS recruitment_status,
+    -- Final match score (0-100)
+    ROUND(LEAST(rc.match_score, 100), 1) AS match_score,
+    -- Generate match reasons based on score components
+    ARRAY[
+      CASE WHEN rc.home_district_id = v_player_home_district THEN 'Same District' END,
+      CASE WHEN ABS(rc.crew_level - v_player_level) <= 2 THEN 'Similar Level' 
+           WHEN rc.crew_level - v_player_level > 2 THEN 'Higher Level Crew' 
+           WHEN v_player_level - rc.crew_level > 2 THEN 'Good for Leveling' END,
+      CASE WHEN rc.max_members - rc.member_count >= 5 THEN 'Many Openings' 
+           WHEN rc.max_members - rc.member_count >= 3 THEN 'Several Openings' 
+           WHEN rc.max_members - rc.member_count >= 1 THEN 'Limited Openings' END,
+      CASE WHEN rc.online_members::FLOAT / rc.member_count >= 0.5 THEN 'Very Active' 
+           WHEN rc.online_members::FLOAT / rc.member_count >= 0.3 THEN 'Active' 
+           WHEN rc.online_members::FLOAT / rc.member_count >= 0.1 THEN 'Moderately Active' END,
+      CASE WHEN rc.win_rate >= 70 THEN 'High Win Rate' 
+           WHEN rc.win_rate >= 50 THEN 'Good Win Rate' 
+           WHEN rc.win_rate >= 30 THEN 'Average Win Rate' END,
+      CASE WHEN rc.reputation >= 80 THEN 'Excellent Reputation' 
+           WHEN rc.reputation >= 60 THEN 'Good Reputation' 
+           WHEN rc.reputation >= 40 THEN 'Average Reputation' END
+    ] AS match_reasons
+  FROM ranked_crews rc
+  WHERE rc.rank <= p_limit
+  ORDER BY rc.match_score DESC, rc.reputation DESC
+  LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION recommend_crews IS 'Recommends crews based on player level, district, activity, and preferences';
+
+-- =============================================================================
+-- SEARCH CREWS
+-- Search for crews by name, tag, or other criteria
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION search_crews(
+  p_search_term VARCHAR(100) DEFAULT NULL,
+  p_min_level INT DEFAULT NULL,
+  p_max_level INT DEFAULT NULL,
+  p_min_members INT DEFAULT NULL,
+  p_max_members INT DEFAULT NULL,
+  p_min_reputation INT DEFAULT NULL,
+  p_max_reputation INT DEFAULT NULL,
+  p_home_district_id VARCHAR DEFAULT NULL,
+  p_is_recruiting BOOLEAN DEFAULT TRUE,
+  p_sort_by VARCHAR(20) DEFAULT 'reputation',
+  p_sort_order VARCHAR(4) DEFAULT 'DESC',
+  p_limit INT DEFAULT 20,
+  p_offset INT DEFAULT 0
+)
+RETURNS TABLE (
+  crew_id UUID,
+  crew_name VARCHAR,
+  crew_tag VARCHAR,
+  description TEXT,
+  leader_username VARCHAR,
+  home_district_name VARCHAR,
+  level INT,
+  member_count INT,
+  max_members INT,
+  reputation INT,
+  wars_won INT,
+  wars_lost INT,
+  win_rate NUMERIC,
+  is_recruiting BOOLEAN,
+  created_at TIMESTAMPTZ,
+  vacancy_percent NUMERIC,
+  total_count BIGINT
+) AS $$
+BEGIN
+  RETURN QUERY
+  WITH crew_stats AS (
+    SELECT 
+      c.id,
+      c.name,
+      c.tag,
+      c.description,
+      p.username AS leader_username,
+      d.name AS home_district_name,
+      c.level,
+      c.member_count,
+      c.max_members,
+      c.reputation,
+      c.wars_won,
+      c.wars_lost,
+      c.is_recruiting,
+      c.created_at,
+      c.home_district_id,
+      -- Calculate win rate
+      CASE 
+        WHEN c.wars_won + c.wars_lost > 0 
+        THEN ROUND((c.wars_won::NUMERIC / (c.wars_won + c.wars_lost) * 100), 1)
+        ELSE 0 
+      END AS win_rate,
+      -- Calculate vacancy percentage
+      ROUND(((c.max_members - c.member_count)::NUMERIC / c.max_members * 100), 1) AS vacancy_percent,
+      COUNT(*) OVER() AS total_rows
+    FROM crews c
+    JOIN players p ON p.id = c.leader_id
+    LEFT JOIN districts d ON d.id = c.home_district_id
+    WHERE c.is_active = TRUE
+    AND (p_search_term IS NULL OR 
+         c.name ILIKE '%' || p_search_term || '%' OR 
+         c.tag ILIKE '%' || p_search_term || '%' OR
+         c.description ILIKE '%' || p_search_term || '%')
+    AND (p_min_level IS NULL OR c.level >= p_min_level)
+    AND (p_max_level IS NULL OR c.level <= p_max_level)
+    AND (p_min_members IS NULL OR c.member_count >= p_min_members)
+    AND (p_max_members IS NULL OR c.member_count <= p_max_members)
+    AND (p_min_reputation IS NULL OR c.reputation >= p_min_reputation)
+    AND (p_max_reputation IS NULL OR c.reputation <= p_max_reputation)
+    AND (p_home_district_id IS NULL OR c.home_district_id = p_home_district_id)
+    AND (p_is_recruiting IS NULL OR c.is_recruiting = p_is_recruiting)
+  ),
+  sorted_crews AS (
+    SELECT 
+      cs.*,
+      CASE p_sort_order
+        WHEN 'ASC' THEN
+          CASE p_sort_by
+            WHEN 'name' THEN ROW_NUMBER() OVER (ORDER BY cs.name ASC)
+            WHEN 'level' THEN ROW_NUMBER() OVER (ORDER BY cs.level ASC)
+            WHEN 'members' THEN ROW_NUMBER() OVER (ORDER BY cs.member_count ASC)
+            WHEN 'reputation' THEN ROW_NUMBER() OVER (ORDER BY cs.reputation ASC)
+            WHEN 'vacancy' THEN ROW_NUMBER() OVER (ORDER BY cs.vacancy_percent ASC)
+            WHEN 'win_rate' THEN ROW_NUMBER() OVER (ORDER BY cs.win_rate ASC)
+            WHEN 'created' THEN ROW_NUMBER() OVER (ORDER BY cs.created_at ASC)
+            ELSE ROW_NUMBER() OVER (ORDER BY cs.reputation ASC)
+          END
+        ELSE
+          CASE p_sort_by
+            WHEN 'name' THEN ROW_NUMBER() OVER (ORDER BY cs.name DESC)
+            WHEN 'level' THEN ROW_NUMBER() OVER (ORDER BY cs.level DESC)
+            WHEN 'members' THEN ROW_NUMBER() OVER (ORDER BY cs.member_count DESC)
+            WHEN 'reputation' THEN ROW_NUMBER() OVER (ORDER BY cs.reputation DESC)
+            WHEN 'vacancy' THEN ROW_NUMBER() OVER (ORDER BY cs.vacancy_percent DESC)
+            WHEN 'win_rate' THEN ROW_NUMBER() OVER (ORDER BY cs.win_rate DESC)
+            WHEN 'created' THEN ROW_NUMBER() OVER (ORDER BY cs.created_at DESC)
+            ELSE ROW_NUMBER() OVER (ORDER BY cs.reputation DESC)
+          END
+      END AS row_num
+    FROM crew_stats cs
+  )
+  SELECT 
+    sc.id AS crew_id,
+    sc.name AS crew_name,
+    sc.tag AS crew_tag,
+    sc.description,
+    sc.leader_username,
+    sc.home_district_name,
+    sc.level,
+    sc.member_count,
+    sc.max_members,
+    sc.reputation,
+    sc.wars_won,
+    sc.wars_lost,
+    sc.win_rate,
+    sc.is_recruiting,
+    sc.created_at,
+    sc.vacancy_percent,
+    sc.total_rows AS total_count
+  FROM sorted_crews sc
+  WHERE sc.row_num > p_offset
+  ORDER BY sc.row_num
+  LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION search_crews IS 'Search and filter crews with pagination support';
+
+-- =============================================================================
+-- GET CREW ACTIVITY FEED
+-- Get recent activity for a crew
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION get_crew_activity_feed(
+  p_crew_id UUID,
+  p_limit INT DEFAULT 20,
+  p_offset INT DEFAULT 0
+)
+RETURNS TABLE (
+  event_id UUID,
+  event_type VARCHAR,
+  event_subtype VARCHAR,
+  player_id UUID,
+  player_username VARCHAR,
+  player_display_name VARCHAR,
+  target_player_id UUID,
+  target_username VARCHAR,
+  value_numeric BIGINT,
+  value_text TEXT,
+  metadata JSONB,
+  created_at TIMESTAMPTZ,
+  is_important BOOLEAN
+) AS $$
+BEGIN
+  RETURN QUERY
+  WITH crew_events AS (
+    SELECT 
+      ge.id AS event_id,
+      ge.event_type,
+      ge.event_subtype,
+      ge.player_id,
+      p.username AS player_username,
+      p.display_name AS player_display_name,
+      ge.target_player_id,
+      tp.username AS target_username,
+      ge.value_numeric,
+      ge.value_text,
+      ge.metadata,
+      ge.created_at,
+      -- Flag important events
+      ge.event_subtype IN (
+        'leadership_transferred', 'member_promoted', 'member_kicked',
+        'vault_deposit', 'vault_withdrawal', 'war_started', 'war_ended',
+        'district_captured', 'level_up'
+      ) AS is_important,
+      ROW_NUMBER() OVER (ORDER BY ge.created_at DESC) AS row_num
+    FROM game_events ge
+    LEFT JOIN players p ON p.id = ge.player_id
+    LEFT JOIN players tp ON tp.id = ge.target_player_id
+    WHERE ge.crew_id = p_crew_id
+    AND ge.event_type IN ('crew', 'war', 'district', 'economy')
+    ORDER BY ge.created_at DESC
+  )
+  SELECT 
+    ce.event_id,
+    ce.event_type,
+    ce.event_subtype,
+    ce.player_id,
+    ce.player_username,
+    ce.player_display_name,
+    ce.target_player_id,
+    ce.target_username,
+    ce.value_numeric,
+    ce.value_text,
+    ce.metadata,
+    ce.created_at,
+    ce.is_important
+  FROM crew_events ce
+  WHERE ce.row_num > p_offset
+  ORDER BY ce.row_num
+  LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION get_crew_activity_feed IS 'Returns recent activity feed for a crew';
+
+-- =============================================================================
+-- GET TOP CREWS
+-- Get top crews by various metrics
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION get_top_crews(
+  p_metric VARCHAR(20) DEFAULT 'reputation',
+  p_limit INT DEFAULT 10,
+  p_min_members INT DEFAULT 5
+)
+RETURNS TABLE (
+  rank INT,
+  crew_id UUID,
+  crew_name VARCHAR,
+  crew_tag VARCHAR,
+  leader_username VARCHAR,
+  level INT,
+  member_count INT,
+  metric_value BIGINT,
+  win_rate NUMERIC,
+  avg_member_level NUMERIC
+) AS $$
+BEGIN
+  RETURN QUERY
+  WITH crew_metrics AS (
+    SELECT 
+      c.id,
+      c.name,
+      c.tag,
+      p.username AS leader_username,
+      c.level,
+      c.member_count,
+      c.reputation,
+      c.total_influence,
+      c.wars_won,
+      c.wars_lost,
+      c.vault_balance,
+      -- Calculate win rate
+      CASE 
+        WHEN c.wars_won + c.wars_lost > 0 
+        THEN ROUND((c.wars_won::NUMERIC / (c.wars_won + c.wars_lost) * 100), 1)
+        ELSE 0 
+      END AS win_rate,
+      -- Calculate average member level
+      (
+        SELECT COALESCE(ROUND(AVG(p2.level), 1), 0)
+        FROM crew_members cm2
+        JOIN players p2 ON p2.id = cm2.player_id
+        WHERE cm2.crew_id = c.id AND cm2.is_active = TRUE
+      ) AS avg_member_level,
+      -- Get metric value based on parameter
+      CASE p_metric
+        WHEN 'reputation' THEN c.reputation::BIGINT
+        WHEN 'influence' THEN c.total_influence::BIGINT
+        WHEN 'wars_won' THEN c.wars_won::BIGINT
+        WHEN 'level' THEN c.level::BIGINT
+        WHEN 'members' THEN c.member_count::BIGINT
+        WHEN 'vault' THEN c.vault_balance
+        WHEN 'win_rate' THEN 
+          CASE 
+            WHEN c.wars_won + c.wars_lost > 0 
+            THEN (c.wars_won::NUMERIC / (c.wars_won + c.wars_lost) * 100)::BIGINT
+            ELSE 0 
+          END
+        ELSE c.reputation::BIGINT
+      END AS metric_value
+    FROM crews c
+    JOIN players p ON p.id = c.leader_id
+    WHERE c.is_active = TRUE
+    AND c.member_count >= p_min_members
+  ),
+  ranked_crews AS (
+    SELECT 
+      cm.*,
+      ROW_NUMBER() OVER (ORDER BY cm.metric_value DESC) AS rank_num
+    FROM crew_metrics cm
+    ORDER BY cm.metric_value DESC
+    LIMIT p_limit
+  )
+  SELECT 
+    rc.rank_num::INT AS rank,
+    rc.id AS crew_id,
+    rc.name AS crew_name,
+    rc.tag AS crew_tag,
+    rc.leader_username,
+    rc.level,
+    rc.member_count,
+    rc.metric_value,
+    rc.win_rate,
+    rc.avg_member_level
+  FROM ranked_crews rc
+  ORDER BY rc.rank_num;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION get_top_crews IS 'Returns top crews by specified metric';
+
+-- =============================================================================
+-- GET CREW STATISTICS
+-- Get detailed statistics for a crew
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION get_crew_statistics(p_crew_id UUID)
+RETURNS TABLE (
+  total_members INT,
+  active_today INT,
+  avg_member_level NUMERIC,
+  total_contribution_points BIGINT,
+  total_vault_deposits BIGINT,
+  total_vault_withdrawals BIGINT,
+  avg_tax_paid_per_member NUMERIC,
+  wars_fought INT,
+  wars_won INT,
+  wars_lost INT,
+  win_rate NUMERIC,
+  district_control_count INT,
+  total_earnings_taxed BIGINT,
+  most_active_player_username VARCHAR,
+  most_active_player_contribution BIGINT,
+  newest_member_username VARCHAR,
+  newest_member_joined_at TIMESTAMPTZ,
+  member_level_distribution JSONB
+) AS $$
+DECLARE
+  v_active_threshold TIMESTAMPTZ := NOW() - INTERVAL '24 hours';
+BEGIN
+  RETURN QUERY
+  WITH member_stats AS (
+    SELECT 
+      COUNT(*) AS total_members,
+      COUNT(CASE WHEN p.updated_at > v_active_threshold THEN 1 END) AS active_today,
+      ROUND(AVG(p.level), 1) AS avg_member_level,
+      SUM(cm.contribution_points) AS total_contribution_points,
+      SUM(cm.earnings_taxed) AS total_earnings_taxed,
+      (
+        SELECT SUM(value_numeric)
+        FROM game_events 
+        WHERE crew_id = p_crew_id 
+        AND event_subtype = 'vault_deposit'
+      ) AS total_vault_deposits,
+      (
+        SELECT SUM(value_numeric)
+        FROM game_events 
+        WHERE crew_id = p_crew_id 
+        AND event_subtype = 'vault_withdrawal'
+      ) AS total_vault_withdrawals,
+      (
+        SELECT p2.username
+        FROM crew_members cm2
+        JOIN players p2 ON p2.id = cm2.player_id
+        WHERE cm2.crew_id = p_crew_id AND cm2.is_active = TRUE
+        ORDER BY cm2.contribution_points DESC
+        LIMIT 1
+      ) AS most_active_player_username,
+      (
+        SELECT MAX(cm2.contribution_points)
+        FROM crew_members cm2
+        WHERE cm2.crew_id = p_crew_id AND cm2.is_active = TRUE
+      ) AS most_active_player_contribution,
+      (
+        SELECT p2.username
+        FROM crew_members cm2
+        JOIN players p2 ON p2.id = cm2.player_id
+        WHERE cm2.crew_id = p_crew_id AND cm2.is_active = TRUE
+        ORDER BY cm2.joined_at DESC
+        LIMIT 1
+      ) AS newest_member_username,
+      (
+        SELECT MAX(cm2.joined_at)
+        FROM crew_members cm2
+        WHERE cm2.crew_id = p_crew_id AND cm2.is_active = TRUE
+      ) AS newest_member_joined_at
+    FROM crew_members cm
+    JOIN players p ON p.id = cm.player_id
+    WHERE cm.crew_id = p_crew_id AND cm.is_active = TRUE
+  ),
+  level_distribution AS (
+    SELECT jsonb_object_agg(
+      level_range, 
+      COUNT(*)::TEXT
+    ) AS distribution
+    FROM (
+      SELECT 
+        CASE
+          WHEN p.level <= 10 THEN '1-10'
+          WHEN p.level <= 20 THEN '11-20'
+          WHEN p.level <= 30 THEN '21-30'
+          WHEN p.level <= 40 THEN '31-40'
+          WHEN p.level <= 50 THEN '41-50'
+          ELSE '50+'
+        END AS level_range
+      FROM crew_members cm
+      JOIN players p ON p.id = cm.player_id
+      WHERE cm.crew_id = p_crew_id AND cm.is_active = TRUE
+    ) levels
+    GROUP BY level_range
+  ),
+  crew_data AS (
+    SELECT 
+      wars_won,
+      wars_lost,
+      wars_won + wars_lost AS wars_fought,
+      CASE 
+        WHEN wars_won + wars_lost > 0 
+        THEN ROUND((wars_won::NUMERIC / (wars_won + wars_lost) * 100), 1)
+        ELSE 0 
+      END AS win_rate
+    FROM crews WHERE id = p_crew_id
+  )
+  SELECT 
+    ms.total_members::INT,
+    ms.active_today::INT,
+    ms.avg_member_level,
+    ms.total_contribution_points,
+    COALESCE(ms.total_vault_deposits, 0)::BIGINT,
+    COALESCE(ms.total_vault_withdrawals, 0)::BIGINT,
+    CASE 
+      WHEN ms.total_members > 0 
+      THEN ROUND(ms.total_earnings_taxed::NUMERIC / ms.total_members, 0)
+      ELSE 0 
+    END AS avg_tax_paid_per_member,
+    cd.wars_fought::INT,
+    cd.wars_won::INT,
+    cd.wars_lost::INT,
+    cd.win_rate,
+    -- District control count (placeholder - implement based on your district system)
+    0::INT AS district_control_count,
+    ms.total_earnings_taxed,
+    ms.most_active_player_username,
+    ms.most_active_player_contribution,
+    ms.newest_member_username,
+    ms.newest_member_joined_at,
+    COALESCE(ld.distribution, '{}'::jsonb) AS member_level_distribution
+  FROM member_stats ms
+  CROSS JOIN crew_data cd
+  LEFT JOIN level_distribution ld ON TRUE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION get_crew_statistics IS 'Returns detailed statistics and analytics for a crew';
+
+-- =============================================================================
+-- GRANT PERMISSIONS FOR NEW FUNCTIONS
+-- =============================================================================
+
+GRANT EXECUTE ON FUNCTION recommend_crews TO authenticated;
+GRANT EXECUTE ON FUNCTION search_crews TO authenticated;
+GRANT EXECUTE ON FUNCTION get_crew_activity_feed TO authenticated;
+GRANT EXECUTE ON FUNCTION get_top_crews TO authenticated;
+GRANT EXECUTE ON FUNCTION get_crew_statistics TO authenticated;

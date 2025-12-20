@@ -1,0 +1,23 @@
+{
+  "name": "@street-legacy/client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@street-legacy/shared": "*",
+    "@supabase/supabase-js": "^2.87.1",
+    "@types/howler": "^2.2.12",
+    "axios": "^1.6.5",
+    "howler": "^2.2.4",
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vite": "^5.0.11"
+  }
+}

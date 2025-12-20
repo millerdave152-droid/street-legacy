@@ -1,0 +1,733 @@
+-- Street Legacy: Additional Scheduled Functions Migration
+-- Migration: 016_scheduled_functions
+-- Description: Additional scheduled functions for energy regeneration, business income, and ban expiration
+-- IMPORTANT: Run after all table creation migrations
+
+-- =============================================================================
+-- REGENERATE PLAYER ENERGY
+-- Runs every 10 minutes - restores 5 energy per interval
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION regenerate_player_energy()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_updated_count INTEGER;
+  v_total_energy_restored INTEGER;
+BEGIN
+  -- Regenerate 5 energy every 10 minutes, up to max_energy
+  WITH updated_players AS (
+    UPDATE public.players
+    SET
+      energy = LEAST(energy + 5, max_energy),
+      energy_updated_at = NOW(),
+      updated_at = NOW()
+    WHERE energy < max_energy
+      AND is_banned = FALSE
+      AND is_active = TRUE
+    RETURNING (LEAST(energy + 5, max_energy) - energy) as energy_gained
+  )
+  SELECT 
+    COUNT(*) as count,
+    COALESCE(SUM(energy_gained), 0) as total_energy
+  INTO v_updated_count, v_total_energy_restored
+  FROM updated_players;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'players_updated', COALESCE(v_updated_count, 0),
+    'energy_restored', COALESCE(v_total_energy_restored, 0),
+    'energy_per_player', 5,
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION regenerate_player_energy IS 'Regenerates 5 energy for all players below max, runs every 10 minutes';
+
+-- =============================================================================
+-- ACCUMULATE BUSINESS INCOME (OPTIMIZED)
+-- Runs every hour - accumulates income for active businesses
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION accumulate_business_income()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_total_accumulated BIGINT := 0;
+  v_businesses_processed INTEGER := 0;
+  v_player_updates INTEGER := 0;
+BEGIN
+  -- Create temp table for business income calculations
+  CREATE TEMP TABLE IF NOT EXISTS business_income_temp (
+    business_id UUID PRIMARY KEY,
+    owner_id UUID,
+    income_amount BIGINT,
+    cost_amount BIGINT
+  ) ON COMMIT DELETE ROWS;
+
+  -- Calculate income for all businesses in bulk
+  INSERT INTO business_income_temp
+  SELECT
+    b.id as business_id,
+    b.owner_id,
+    -- Calculate hourly income with upgrades and employees
+    FLOOR(
+      bt.income_per_hour * 
+      (1.0 + (b.upgrade_level * 0.20) + (b.efficiency_bonus / 100.0)) *
+      (1.0 + (b.employee_count * 0.10))
+    ) as income_amount,
+    bt.cost_per_hour as cost_amount
+  FROM public.businesses b
+  JOIN public.business_types bt ON b.business_type_id = bt.id
+  WHERE b.status = 'open'
+    AND b.owner_id IS NOT NULL
+    AND b.is_active = TRUE;
+
+  -- Get counts
+  SELECT COUNT(*) INTO v_businesses_processed FROM business_income_temp;
+  
+  -- Calculate net income (income - costs, minimum 0)
+  SELECT COALESCE(SUM(GREATEST(income_amount - cost_amount, 0)), 0) 
+  INTO v_total_accumulated 
+  FROM business_income_temp;
+
+  -- Update businesses with accumulated income and expenses
+  WITH business_updates AS (
+    UPDATE public.businesses b
+    SET
+      total_revenue = b.total_revenue + COALESCE(bit.income_amount, 0),
+      total_expenses = b.total_expenses + COALESCE(bit.cost_amount, 0),
+      last_income_collected = NOW(),
+      updated_at = NOW()
+    FROM business_income_temp bit
+    WHERE b.id = bit.business_id
+    RETURNING b.owner_id, GREATEST(bit.income_amount - bit.cost_amount, 0) as net_income
+  )
+  -- Add income to player balances
+  UPDATE public.players p
+  SET
+    money = p.money + bu.net_income,
+    total_earnings = p.total_earnings + bu.net_income,
+    updated_at = NOW()
+  FROM business_updates bu
+  WHERE p.id = bu.owner_id
+    AND bu.net_income > 0;
+
+  GET DIAGNOSTICS v_player_updates = ROW_COUNT;
+
+  -- Clean up temp table
+  DROP TABLE business_income_temp;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'businesses_processed', v_businesses_processed,
+    'players_paid', v_player_updates,
+    'total_accumulated', v_total_accumulated,
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Clean up temp table on error
+    DROP TABLE IF EXISTS business_income_temp;
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION accumulate_business_income IS 'Accumulates hourly income for all active businesses and pays owners';
+
+-- =============================================================================
+-- CHECK BAN EXPIRATIONS (ENHANCED)
+-- Runs hourly - automatically unbans players with expired temporary bans
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION check_ban_expirations()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_unbanned_count INTEGER := 0;
+  v_unbanned_ids UUID[];
+BEGIN
+  -- Check if ban_until column exists
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'players' AND column_name = 'ban_until'
+  ) THEN
+    -- Unban players with expired temporary bans
+    WITH unbanned_players AS (
+      UPDATE public.players
+      SET 
+        is_banned = FALSE,
+        ban_reason = NULL,
+        ban_until = NULL,
+        updated_at = NOW()
+      WHERE is_banned = TRUE
+        AND ban_until IS NOT NULL
+        AND ban_until < NOW()
+      RETURNING id
+    )
+    SELECT 
+      COUNT(*),
+      ARRAY_AGG(id)
+    INTO v_unbanned_count, v_unbanned_ids
+    FROM unbanned_players;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'players_unbanned', v_unbanned_count,
+    'unbanned_player_ids', COALESCE(v_unbanned_ids, '{}'::UUID[]),
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION check_ban_expirations IS 'Checks and removes expired temporary bans';
+
+-- =============================================================================
+-- UPDATE DISTRICT STATISTICS (OPTIMIZED)
+-- Runs daily - updates district crime rate and economy based on activity
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION update_district_statistics()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_updated_count INTEGER := 0;
+BEGIN
+  -- Update all districts in bulk using window functions
+  WITH district_stats AS (
+    SELECT
+      d.id,
+      d.crime_rate,
+      d.economy_level,
+      -- Crime count in last 24 hours
+      COALESCE(cl.crime_count, 0) as recent_crimes,
+      -- Transaction count in last 24 hours
+      COALESCE(tx.transaction_count, 0) as recent_transactions
+    FROM public.districts d
+    LEFT JOIN (
+      SELECT district_id, COUNT(*) as crime_count
+      FROM public.crime_logs
+      WHERE attempted_at > NOW() - INTERVAL '24 hours'
+      GROUP BY district_id
+    ) cl ON d.id = cl.district_id
+    LEFT JOIN (
+      SELECT p.current_district_id, COUNT(*) as transaction_count
+      FROM public.transactions t
+      JOIN public.players p ON t.player_id = p.id
+      WHERE t.created_at > NOW() - INTERVAL '24 hours'
+        AND t.status = 'completed'
+      GROUP BY p.current_district_id
+    ) tx ON d.id = tx.current_district_id
+  ),
+  updated_districts AS (
+    UPDATE public.districts d
+    SET
+      crime_rate = LEAST(100, GREATEST(10,
+        (ds.crime_rate * 0.7 + LEAST(ds.recent_crimes * 2, 100) * 0.3)::INTEGER
+      )),
+      economy_level = LEAST(100, GREATEST(20,
+        (ds.economy_level * 0.7 + LEAST(ds.recent_transactions / 5, 100) * 0.3)::INTEGER
+      )),
+      updated_at = NOW()
+    FROM district_stats ds
+    WHERE d.id = ds.id
+      AND (ds.recent_crimes > 0 OR ds.recent_transactions > 0 OR RANDOM() < 0.1) -- Optimize: update only if changed
+    RETURNING d.id
+  )
+  SELECT COUNT(*) INTO v_updated_count FROM updated_districts;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'districts_updated', v_updated_count,
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION update_district_statistics IS 'Updates district crime rate and economy based on 24h activity';
+
+-- =============================================================================
+-- EXPIRE NEWBIE PROTECTION (ENHANCED)
+-- Runs daily - removes newbie protection from players past their protection period
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION expire_newbie_protection()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_expired_count INTEGER := 0;
+  v_expired_ids UUID[];
+BEGIN
+  WITH expired_players AS (
+    UPDATE public.players
+    SET 
+      newbie_protected = FALSE,
+      newbie_protection_until = NULL,
+      updated_at = NOW()
+    WHERE newbie_protected = TRUE
+      AND (
+        (newbie_protection_until IS NOT NULL AND newbie_protection_until < NOW())
+        OR level >= 5
+        OR created_at < NOW() - INTERVAL '7 days' -- Auto-expire after 7 days regardless
+      )
+    RETURNING id
+  )
+  SELECT 
+    COUNT(*),
+    ARRAY_AGG(id)
+  INTO v_expired_count, v_expired_ids
+  FROM expired_players;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'players_expired', v_expired_count,
+    'expired_player_ids', COALESCE(v_expired_ids, '{}'::UUID[]),
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION expire_newbie_protection IS 'Removes newbie protection from expired or leveled players';
+
+-- =============================================================================
+-- UPDATE CREW STATISTICS (OPTIMIZED)
+-- Runs daily - updates crew level, influence, and territory control
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION update_crew_statistics()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_crews_updated INTEGER := 0;
+  v_crews_leveled_up INTEGER := 0;
+  v_total_xp_added BIGINT := 0;
+BEGIN
+  -- Calculate XP for all crews
+  WITH crew_xp_calc AS (
+    SELECT
+      c.id,
+      c.xp,
+      c.level,
+      COALESCE(SUM(p.xp), 0) / 100 as xp_to_add
+    FROM public.crews c
+    LEFT JOIN public.crew_members cm ON c.id = cm.crew_id AND cm.is_active = TRUE
+    LEFT JOIN public.players p ON cm.player_id = p.id AND p.is_banned = FALSE
+    WHERE c.member_count > 0
+      AND c.is_active = TRUE
+    GROUP BY c.id, c.xp, c.level
+  ),
+  crew_updates AS (
+    UPDATE public.crews c
+    SET
+      xp = c.xp + cxc.xp_to_add,
+      updated_at = NOW()
+    FROM crew_xp_calc cxc
+    WHERE c.id = cxc.id
+      AND cxc.xp_to_add > 0
+    RETURNING c.id, cxc.xp_to_add, cxc.level, (c.xp + cxc.xp_to_add) as new_xp
+  ),
+  level_ups AS (
+    UPDATE public.crews c
+    SET
+      level = c.level + 1,
+      max_members = c.max_members + 5,
+      updated_at = NOW()
+    FROM crew_updates cu
+    WHERE c.id = cu.id
+      AND cu.new_xp >= (cu.level * 10000)
+      AND cu.level < 20
+    RETURNING c.id
+  )
+  SELECT 
+    COUNT(DISTINCT cu.id),
+    COUNT(DISTINCT lu.id),
+    COALESCE(SUM(cu.xp_to_add), 0)
+  INTO v_crews_updated, v_crews_leveled_up, v_total_xp_added
+  FROM crew_updates cu
+  LEFT JOIN level_ups lu ON cu.id = lu.id;
+
+  -- Update district control if function exists
+  IF EXISTS (
+    SELECT 1 FROM pg_proc 
+    WHERE proname = 'calculate_district_controller' 
+      AND pronamespace = 'public'::regnamespace
+  ) THEN
+    PERFORM public.calculate_district_controller(id) FROM public.districts;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'crews_updated', v_crews_updated,
+    'crews_leveled_up', v_crews_leveled_up,
+    'total_xp_added', v_total_xp_added,
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION update_crew_statistics IS 'Updates crew XP, levels, and territory control';
+
+-- =============================================================================
+-- UPDATED HOURLY MAINTENANCE (WITH ERROR HANDLING)
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION run_hourly_maintenance()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_results jsonb := '{}'::jsonb;
+  v_function_name TEXT;
+  v_function_result jsonb;
+  v_failed_functions TEXT[] := '{}';
+  v_successful_functions INTEGER := 0;
+BEGIN
+  -- List of functions to run with error handling
+  FOR v_function_name IN 
+    SELECT unnest(ARRAY[
+      'process_heat_decay',
+      'expire_marketplace_listings',
+      'check_mission_expirations',
+      'cleanup_expired_cooldowns_scheduled',
+      'expire_crew_invites_scheduled',
+      'process_jail_releases',
+      'check_ban_expirations',
+      'accumulate_business_income'
+    ])
+  LOOP
+    BEGIN
+      -- Check if function exists
+      IF EXISTS (
+        SELECT 1 FROM pg_proc 
+        WHERE proname = v_function_name 
+          AND pronamespace = 'public'::regnamespace
+      ) THEN
+        EXECUTE 'SELECT public.' || v_function_name || '()' INTO v_function_result;
+        v_results := v_results || jsonb_build_object(v_function_name, v_function_result);
+        v_successful_functions := v_successful_functions + 1;
+      ELSE
+        v_results := v_results || jsonb_build_object(v_function_name, jsonb_build_object(
+          'success', false,
+          'error', 'Function does not exist',
+          'skipped', true
+        ));
+      END IF;
+    EXCEPTION
+      WHEN OTHERS THEN
+        v_failed_functions := v_failed_functions || v_function_name;
+        v_results := v_results || jsonb_build_object(v_function_name, jsonb_build_object(
+          'success', false,
+          'error', SQLERRM,
+          'failed', true
+        ));
+    END;
+  END LOOP;
+
+  -- Log the maintenance run
+  INSERT INTO public.game_events (
+    event_type, 
+    event_subtype, 
+    metadata,
+    created_at
+  ) VALUES (
+    'system', 
+    'hourly_maintenance', 
+    jsonb_build_object(
+      'results', v_results,
+      'successful_functions', v_successful_functions,
+      'failed_functions', v_failed_functions,
+      'total_functions', 8
+    ),
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', v_failed_functions = '{}',
+    'results', v_results,
+    'successful_functions', v_successful_functions,
+    'failed_functions', v_failed_functions,
+    'total_functions', 8,
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION run_hourly_maintenance IS 'Runs all hourly maintenance functions with error handling';
+
+-- =============================================================================
+-- UPDATED DAILY MAINTENANCE (WITH ERROR HANDLING)
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION run_daily_maintenance()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_results jsonb := '{}'::jsonb;
+  v_function_name TEXT;
+  v_function_result jsonb;
+  v_failed_functions TEXT[] := '{}';
+  v_successful_functions INTEGER := 0;
+BEGIN
+  -- List of functions to run with error handling
+  FOR v_function_name IN 
+    SELECT unnest(ARRAY[
+      'collect_property_taxes',
+      'reset_daily_missions_scheduled',
+      'update_property_values',
+      'update_district_statistics',
+      'expire_newbie_protection',
+      'update_crew_statistics'
+    ])
+  LOOP
+    BEGIN
+      -- Check if function exists
+      IF EXISTS (
+        SELECT 1 FROM pg_proc 
+        WHERE proname = v_function_name 
+          AND pronamespace = 'public'::regnamespace
+      ) THEN
+        EXECUTE 'SELECT public.' || v_function_name || '()' INTO v_function_result;
+        v_results := v_results || jsonb_build_object(v_function_name, v_function_result);
+        v_successful_functions := v_successful_functions + 1;
+      ELSE
+        v_results := v_results || jsonb_build_object(v_function_name, jsonb_build_object(
+          'success', false,
+          'error', 'Function does not exist',
+          'skipped', true
+        ));
+      END IF;
+    EXCEPTION
+      WHEN OTHERS THEN
+        v_failed_functions := v_failed_functions || v_function_name;
+        v_results := v_results || jsonb_build_object(v_function_name, jsonb_build_object(
+          'success', false,
+          'error', SQLERRM,
+          'failed', true
+        ));
+    END;
+  END LOOP;
+
+  -- Log the maintenance run
+  INSERT INTO public.game_events (
+    event_type, 
+    event_subtype, 
+    metadata,
+    created_at
+  ) VALUES (
+    'system', 
+    'daily_maintenance', 
+    jsonb_build_object(
+      'results', v_results,
+      'successful_functions', v_successful_functions,
+      'failed_functions', v_failed_functions,
+      'total_functions', 6
+    ),
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', v_failed_functions = '{}',
+    'results', v_results,
+    'successful_functions', v_successful_functions,
+    'failed_functions', v_failed_functions,
+    'total_functions', 6,
+    'ran_at', NOW()
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', SQLERRM,
+      'ran_at', NOW()
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION run_daily_maintenance IS 'Runs all daily maintenance functions with error handling';
+
+-- =============================================================================
+-- CREATE SCHEDULED FUNCTIONS TABLE FOR TRACKING
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS public.scheduled_function_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  function_name VARCHAR(100) NOT NULL,
+  status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failed', 'skipped')),
+  result JSONB,
+  error_message TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  duration_ms INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_function_logs_function_name ON public.scheduled_function_logs(function_name);
+CREATE INDEX IF NOT EXISTS idx_scheduled_function_logs_created_at ON public.scheduled_function_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_function_logs_status ON public.scheduled_function_logs(status);
+
+-- =============================================================================
+-- WRAPPER FUNCTION WITH LOGGING
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION run_scheduled_function(
+  p_function_name TEXT,
+  p_function_params TEXT DEFAULT ''
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_start_time TIMESTAMPTZ := NOW();
+  v_result jsonb;
+  v_error_text TEXT;
+  v_status VARCHAR(20);
+  v_duration_ms INTEGER;
+BEGIN
+  BEGIN
+    -- Execute the function
+    EXECUTE 'SELECT public.' || p_function_name || '(' || COALESCE(p_function_params, '') || ')' 
+    INTO v_result;
+    
+    v_status := 'success';
+    v_error_text := NULL;
+    
+  EXCEPTION
+    WHEN OTHERS THEN
+      v_result := jsonb_build_object('error', SQLERRM);
+      v_status := 'failed';
+      v_error_text := SQLERRM;
+  END;
+  
+  -- Calculate duration
+  v_duration_ms := EXTRACT(EPOCH FROM (NOW() - v_start_time)) * 1000;
+  
+  -- Log the execution
+  INSERT INTO public.scheduled_function_logs (
+    function_name,
+    status,
+    result,
+    error_message,
+    started_at,
+    completed_at,
+    duration_ms
+  ) VALUES (
+    p_function_name,
+    v_status,
+    v_result,
+    v_error_text,
+    v_start_time,
+    NOW(),
+    v_duration_ms
+  );
+  
+  RETURN jsonb_build_object(
+    'function', p_function_name,
+    'status', v_status,
+    'result', v_result,
+    'duration_ms', v_duration_ms,
+    'ran_at', NOW()
+  );
+END;
+$$;
+
+COMMENT ON FUNCTION run_scheduled_function IS 'Wrapper function to run any scheduled function with logging and error handling';
+
+-- =============================================================================
+-- GRANT PERMISSIONS (SECURE VERSION)
+-- =============================================================================
+
+-- First revoke all permissions from public
+REVOKE ALL ON FUNCTION regenerate_player_energy() FROM PUBLIC;
+REVOKE ALL ON FUNCTION accumulate_business_income() FROM PUBLIC;
+REVOKE ALL ON FUNCTION check_ban_expirations() FROM PUBLIC;
+REVOKE ALL ON FUNCTION update_district_statistics() FROM PUBLIC;
+REVOKE ALL ON FUNCTION expire_newbie_protection() FROM PUBLIC;
+REVOKE ALL ON FUNCTION update_crew_statistics() FROM PUBLIC;
+REVOKE ALL ON FUNCTION run_hourly_maintenance() FROM PUBLIC;
+REVOKE ALL ON FUNCTION run_daily_maintenance() FROM PUBLIC;
+REVOKE ALL ON FUNCTION run_scheduled_function(TEXT, TEXT) FROM PUBLIC;
+
+-- Only grant to specific service role
+GRANT EXECUTE ON FUNCTION regenerate_player_energy() TO service_role;
+GRANT EXECUTE ON FUNCTION accumulate_business_income() TO service_role;
+GRANT EXECUTE ON FUNCTION check_ban_expirations() TO service_role;
+GRANT EXECUTE ON FUNCTION update_district_statistics() TO service_role;
+GRANT EXECUTE ON FUNCTION expire_newbie_protection() TO service_role;
+GRANT EXECUTE ON FUNCTION update_crew_statistics() TO service_role;
+GRANT EXECUTE ON FUNCTION run_hourly_maintenance() TO service_role;
+GRANT EXECUTE ON FUNCTION run_daily_maintenance() TO service_role;
+GRANT EXECUTE ON FUNCTION run_scheduled_function(TEXT, TEXT) TO service_role;
+
+-- Grant table permissions for logging
+GRANT INSERT ON TABLE public.scheduled_function_logs TO service_role;
+GRANT SELECT ON TABLE public.scheduled_function_logs TO service_role;
+
+-- =============================================================================
+-- END OF MIGRATION
+-- =============================================================================
+-- Scheduling notes: After this migration runs successfully, you can schedule
+-- the functions using pg_cron or an external scheduler.

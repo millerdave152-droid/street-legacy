@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Street Legacy</title>
+
+    <!-- PWA Meta Tags -->
+    <meta name="description" content="Rise from the streets to become a legend in this crime empire game" />
+    <meta name="theme-color" content="#dc2626" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Street Legacy" />
+    <meta name="application-name" content="Street Legacy" />
+    <meta name="msapplication-TileColor" content="#0a0a0a" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- Preconnect to API -->
+    <link rel="preconnect" href="/api" />
+
+    <!-- JetBrains Mono - Modern Hacker Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #0a0a0a;
+        touch-action: none;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+        /* Force flex centering on body */
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      #game-container {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+      }
+      /* Force Phaser canvas centering */
+      #game-container canvas {
+        display: block !important;
+        margin: 0 auto !important;
+      }
+      /* Center Phaser's DOM container as well */
+      #game-container > div {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game-container"></div>
+    <script type="module" src="/src/main.ts"></script>
+
+    <!-- Prevent iOS bounce/overscroll -->
+    <script>
+      document.body.addEventListener('touchmove', function(e) {
+        // Prevent default for game area
+        if (e.target.closest('#game-container')) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      // Prevent double-tap zoom
+      let lastTouchEnd = 0;
+      document.addEventListener('touchend', function(e) {
+        const now = Date.now();
+        if (now - lastTouchEnd <= 300) {
+          e.preventDefault();
+        }
+        lastTouchEnd = now;
+      }, false);
+    </script>
+  </body>
+</html>

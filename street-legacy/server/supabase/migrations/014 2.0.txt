@@ -1,0 +1,237 @@
+-- =============================================================================
+-- FIX: CHECK PLAYERS TABLE COLUMNS AND CREATE PROPER SOLUTION
+-- =============================================================================
+
+-- First, let me see ALL columns in the players table
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'players'
+ORDER BY ordinal_position;
+
+-- Based on common patterns, I need to understand what columns actually exist
+-- Let me check if there's ANY boolean column that could indicate status
+DO $$
+DECLARE
+  bool_columns TEXT := '';
+BEGIN
+  SELECT string_agg(column_name, ', ') INTO bool_columns
+  FROM information_schema.columns 
+  WHERE table_name = 'players' 
+    AND data_type = 'boolean'
+    AND table_schema = 'public';
+    
+  RAISE NOTICE 'Boolean columns in players table: %', COALESCE(bool_columns, 'None found');
+END
+$$;
+
+-- =============================================================================
+-- SIMPLEST FIX: CREATE is_active COLUMN IF IT DOESN'T EXIST
+-- =============================================================================
+
+DO $$
+BEGIN
+  -- Check if is_active column exists
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'players' AND column_name = 'is_active'
+  ) THEN
+    -- Add is_active column
+    ALTER TABLE players ADD COLUMN is_active BOOLEAN DEFAULT TRUE NOT NULL;
+    RAISE NOTICE '✅ Added is_active column to players table';
+  ELSE
+    RAISE NOTICE '✅ is_active column already exists';
+  END IF;
+END
+$$;
+
+-- =============================================================================
+-- CREATE BASIC VIEWS WITHOUT COMPLEX LOGIC
+-- =============================================================================
+
+-- Drop existing problematic views
+DROP VIEW IF EXISTS active_players_view;
+DROP VIEW IF EXISTS public.active_players;
+
+-- Create a simple view for active players
+CREATE OR REPLACE VIEW active_players_view AS
+SELECT *
+FROM players 
+WHERE is_active = TRUE;
+
+-- Create a simple materialized view (without complex joins)
+DROP MATERIALIZED VIEW IF EXISTS player_leaderboards;
+
+CREATE MATERIALIZED VIEW player_leaderboards AS
+SELECT 
+  p.id,
+  p.username,
+  p.display_name,
+  p.level,
+  p.rep_crime,
+  p.rep_business,
+  p.cash_balance,
+  p.bank_balance,
+  p.cash_balance + p.bank_balance as total_wealth,
+  ROW_NUMBER() OVER (ORDER BY (p.cash_balance + p.bank_balance) DESC) as wealth_rank,
+  ROW_NUMBER() OVER (ORDER BY p.level DESC) as level_rank,
+  NOW() as refreshed_at
+FROM players p
+WHERE p.is_active = TRUE
+WITH DATA;
+
+-- Create indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_player_leaderboards_id ON player_leaderboards(id);
+CREATE INDEX IF NOT EXISTS idx_player_leaderboards_wealth ON player_leaderboards(wealth_rank);
+CREATE INDEX IF NOT EXISTS idx_player_leaderboards_level ON player_leaderboards(level_rank);
+
+-- =============================================================================
+-- SIMPLIFY ALL FUNCTIONS TO BASIC QUERIES
+-- =============================================================================
+
+-- Simple test function
+CREATE OR REPLACE FUNCTION test_basic_system()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_active_count INTEGER;
+  v_leaderboard_count INTEGER;
+BEGIN
+  -- Count active players
+  SELECT COUNT(*) INTO v_active_count FROM players WHERE is_active = TRUE;
+  RAISE NOTICE 'Active players: %', v_active_count;
+  
+  -- Count leaderboard entries
+  SELECT COUNT(*) INTO v_leaderboard_count FROM player_leaderboards;
+  RAISE NOTICE 'Leaderboard entries: %', v_leaderboard_count;
+  
+  RETURN jsonb_build_object(
+    'success', TRUE,
+    'active_players', v_active_count,
+    'leaderboard_entries', v_leaderboard_count,
+    'tested_at', NOW()
+  );
+END;
+$$;
+
+-- Simple metrics function
+CREATE OR REPLACE FUNCTION collect_basic_metrics()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_active_count INTEGER;
+  v_total_cash BIGINT;
+  v_total_bank BIGINT;
+BEGIN
+  -- Get active player count
+  SELECT COUNT(*) INTO v_active_count FROM players WHERE is_active = TRUE;
+  
+  -- Get total cash and bank
+  SELECT 
+    COALESCE(SUM(cash_balance), 0),
+    COALESCE(SUM(bank_balance), 0)
+  INTO v_total_cash, v_total_bank
+  FROM players WHERE is_active = TRUE;
+  
+  RETURN jsonb_build_object(
+    'active_players', v_active_count,
+    'total_cash', v_total_cash,
+    'total_bank', v_total_bank,
+    'total_wealth', v_total_cash + v_total_bank,
+    'collected_at', NOW()
+  );
+END;
+$$;
+
+-- =============================================================================
+-- CREATE BASIC TABLES FOR ENHANCED FEATURES (SIMPLIFIED)
+-- =============================================================================
+
+-- Create system_metrics table (simplified)
+CREATE TABLE IF NOT EXISTS system_metrics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  metric_name VARCHAR(100) NOT NULL,
+  metric_value NUMERIC NOT NULL,
+  measured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_metrics_name ON system_metrics(metric_name, measured_at DESC);
+
+-- Create notification_queue table (simplified)
+CREATE TABLE IF NOT EXISTS notification_queue (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  player_id UUID REFERENCES players(id),
+  title VARCHAR(200) NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at TIMESTAMPTZ,
+  read_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_queue_player ON notification_queue(player_id, delivered_at) WHERE delivered_at IS NULL;
+
+-- =============================================================================
+-- TEST THE BASIC SYSTEM
+-- =============================================================================
+
+-- Test 1: Verify is_active column exists and has data
+SELECT 
+  'is_active column check' as test,
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'players' AND column_name = 'is_active') as column_exists,
+  COUNT(*) as total_players,
+  COUNT(CASE WHEN is_active = TRUE THEN 1 END) as active_players
+FROM players;
+
+-- Test 2: Test the view
+SELECT 'Active players view' as test, COUNT(*) as count FROM active_players_view;
+
+-- Test 3: Test the materialized view
+SELECT 'Leaderboard view' as test, COUNT(*) as count FROM player_leaderboards;
+
+-- Test 4: Test the basic functions
+SELECT 'Basic metrics' as test, collect_basic_metrics() as result;
+SELECT 'System test' as test, test_basic_system() as result;
+
+-- Test 5: Show some sample data from leaderboards
+SELECT username, level, total_wealth, wealth_rank 
+FROM player_leaderboards 
+ORDER BY wealth_rank 
+LIMIT 5;
+
+-- =============================================================================
+-- GRANT BASIC PERMISSIONS
+-- =============================================================================
+
+GRANT EXECUTE ON FUNCTION test_basic_system() TO authenticated;
+GRANT EXECUTE ON FUNCTION collect_basic_metrics() TO authenticated;
+GRANT SELECT ON active_players_view TO authenticated;
+GRANT SELECT ON player_leaderboards TO authenticated;
+GRANT SELECT ON system_metrics TO authenticated;
+
+-- =============================================================================
+-- FINAL SIMPLE SOLUTION
+-- =============================================================================
+
+DO $$
+BEGIN
+  RAISE NOTICE '========================================';
+  RAISE NOTICE '✅ BASIC SYSTEM INSTALLED SUCCESSFULLY';
+  RAISE NOTICE '========================================';
+  RAISE NOTICE '';
+  RAISE NOTICE '1. Added is_active column to players table';
+  RAISE NOTICE '2. Created active_players_view';
+  RAISE NOTICE '3. Created player_leaderboards materialized view';
+  RAISE NOTICE '4. Created basic metrics and test functions';
+  RAISE NOTICE '';
+  RAISE NOTICE 'To test: SELECT test_basic_system();';
+  RAISE NOTICE 'To refresh leaderboards: REFRESH MATERIALIZED VIEW player_leaderboards;';
+  RAISE NOTICE '========================================';
+END
+$$;
+
+-- Optional: Refresh the materialized view
+REFRESH MATERIALIZED VIEW player_leaderboards;

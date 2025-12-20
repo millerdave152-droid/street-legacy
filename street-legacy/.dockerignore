@@ -1,0 +1,12 @@
+node_modules
+*.log
+.git
+.gitignore
+.env
+.env.*
+!.env.production.example
+*.md
+.vscode
+.idea
+dist
+deploy.tar.gz

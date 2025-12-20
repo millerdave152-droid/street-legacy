@@ -1,0 +1,615 @@
+/* Street Legacy Mobile & PWA Styles */
+
+/* ===================================
+   CSS Custom Properties for Safe Areas
+   =================================== */
+:root {
+  /* Safe area insets for notched devices */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+
+  /* Bottom navigation height */
+  --bottom-nav-height: 64px;
+  --bottom-nav-height-safe: calc(var(--bottom-nav-height) + var(--safe-area-inset-bottom));
+
+  /* Header height */
+  --header-height: 56px;
+  --header-height-safe: calc(var(--header-height) + var(--safe-area-inset-top));
+
+  /* Touch target minimum sizes */
+  --touch-target-min: 44px;
+
+  /* Spacing scale for mobile */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+}
+
+/* ===================================
+   Base Mobile Styles
+   =================================== */
+html {
+  /* Prevent text size adjustment on orientation change */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+
+  /* Smooth scrolling */
+  scroll-behavior: smooth;
+
+  /* Prevent pull-to-refresh in standalone mode */
+  overscroll-behavior-y: contain;
+}
+
+body {
+  /* Prevent selection on long press */
+  -webkit-user-select: none;
+  user-select: none;
+
+  /* Disable tap highlight */
+  -webkit-tap-highlight-color: transparent;
+
+  /* Prevent text selection during swipe */
+  touch-action: manipulation;
+
+  /* Safe area padding */
+  padding-top: var(--safe-area-inset-top);
+  padding-bottom: var(--safe-area-inset-bottom);
+  padding-left: var(--safe-area-inset-left);
+  padding-right: var(--safe-area-inset-right);
+}
+
+/* Allow text selection in specific areas */
+.selectable,
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ===================================
+   Safe Area Utilities
+   =================================== */
+.safe-top {
+  padding-top: var(--safe-area-inset-top);
+}
+
+.safe-bottom {
+  padding-bottom: var(--safe-area-inset-bottom);
+}
+
+.safe-left {
+  padding-left: var(--safe-area-inset-left);
+}
+
+.safe-right {
+  padding-right: var(--safe-area-inset-right);
+}
+
+.safe-x {
+  padding-left: var(--safe-area-inset-left);
+  padding-right: var(--safe-area-inset-right);
+}
+
+.safe-y {
+  padding-top: var(--safe-area-inset-top);
+  padding-bottom: var(--safe-area-inset-bottom);
+}
+
+.safe-all {
+  padding: var(--safe-area-inset-top) var(--safe-area-inset-right) var(--safe-area-inset-bottom) var(--safe-area-inset-left);
+}
+
+/* Margin variants */
+.m-safe-top {
+  margin-top: var(--safe-area-inset-top);
+}
+
+.m-safe-bottom {
+  margin-bottom: var(--safe-area-inset-bottom);
+}
+
+/* ===================================
+   Touch Interaction Styles
+   =================================== */
+.touch-manipulation {
+  touch-action: manipulation;
+}
+
+.touch-none {
+  touch-action: none;
+}
+
+.touch-pan-x {
+  touch-action: pan-x;
+}
+
+.touch-pan-y {
+  touch-action: pan-y;
+}
+
+/* Minimum touch target size */
+.touch-target {
+  min-width: var(--touch-target-min);
+  min-height: var(--touch-target-min);
+}
+
+/* Touch feedback */
+.touch-feedback {
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+.touch-feedback:active {
+  transform: scale(0.97);
+  opacity: 0.8;
+}
+
+/* ===================================
+   Ripple Animation
+   =================================== */
+@keyframes ripple {
+  0% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+.animate-ripple {
+  animation: ripple 0.6s ease-out forwards;
+}
+
+/* ===================================
+   Pull to Refresh
+   =================================== */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ===================================
+   Slide Animations
+   =================================== */
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.3s ease-out forwards;
+}
+
+.animate-slide-down {
+  animation: slideDown 0.3s ease-out forwards;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.3s ease-out forwards;
+}
+
+.animate-slide-in-left {
+  animation: slideInLeft 0.3s ease-out forwards;
+}
+
+/* ===================================
+   Bottom Navigation Layout
+   =================================== */
+.has-bottom-nav {
+  padding-bottom: var(--bottom-nav-height-safe);
+}
+
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--bottom-nav-height-safe);
+  padding-bottom: var(--safe-area-inset-bottom);
+  z-index: 50;
+}
+
+/* ===================================
+   Header Layout
+   =================================== */
+.has-header {
+  padding-top: var(--header-height-safe);
+}
+
+.mobile-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-height-safe);
+  padding-top: var(--safe-area-inset-top);
+  z-index: 40;
+}
+
+/* ===================================
+   Mobile Modal & Overlay
+   =================================== */
+.mobile-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 100;
+}
+
+.mobile-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 101;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ===================================
+   Action Sheet
+   =================================== */
+.action-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding-bottom: var(--safe-area-inset-bottom);
+  z-index: 102;
+  border-radius: 16px 16px 0 0;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+/* ===================================
+   Swipeable Panel
+   =================================== */
+.swipeable-panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  touch-action: pan-y;
+  will-change: transform;
+}
+
+.swipe-handle {
+  width: 40px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  margin: 8px auto;
+}
+
+/* ===================================
+   Scrollable Areas
+   =================================== */
+.scroll-container {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Horizontal scroll */
+.scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x mandatory;
+}
+
+.scroll-x > * {
+  scroll-snap-align: start;
+}
+
+/* ===================================
+   Mobile Form Elements
+   =================================== */
+.mobile-input {
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 16px; /* Prevents iOS zoom on focus */
+  min-height: var(--touch-target-min);
+}
+
+.mobile-button {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  cursor: pointer;
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+  padding: 12px 24px;
+  font-size: 16px;
+  border-radius: 8px;
+  touch-action: manipulation;
+}
+
+/* ===================================
+   Responsive Typography
+   =================================== */
+@media (max-width: 480px) {
+  html {
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+  html {
+    font-size: 15px;
+  }
+}
+
+@media (min-width: 769px) {
+  html {
+    font-size: 16px;
+  }
+}
+
+/* ===================================
+   Mobile-First Grid
+   =================================== */
+.mobile-grid {
+  display: grid;
+  gap: var(--spacing-md);
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 480px) {
+  .mobile-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 768px) {
+  .mobile-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .mobile-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* ===================================
+   Hide/Show Based on Device
+   =================================== */
+.mobile-only {
+  display: block;
+}
+
+.desktop-only {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .mobile-only {
+    display: none;
+  }
+
+  .desktop-only {
+    display: block;
+  }
+}
+
+/* ===================================
+   PWA Install Banner
+   =================================== */
+.install-banner {
+  position: fixed;
+  bottom: var(--bottom-nav-height-safe);
+  left: var(--spacing-md);
+  right: var(--spacing-md);
+  padding: var(--spacing-md);
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 12px;
+  z-index: 60;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* ===================================
+   Offline Indicator
+   =================================== */
+.offline-indicator {
+  position: fixed;
+  top: var(--safe-area-inset-top);
+  left: 0;
+  right: 0;
+  background: #fbbf24;
+  color: #1a1a2e;
+  text-align: center;
+  padding: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 200;
+  transform: translateY(-100%);
+  transition: transform 0.3s ease;
+}
+
+.offline-indicator.visible {
+  transform: translateY(0);
+}
+
+/* ===================================
+   Loading States
+   =================================== */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 25%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s infinite;
+  border-radius: 4px;
+}
+
+@keyframes skeleton-loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ===================================
+   Reduced Motion Support
+   =================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===================================
+   Landscape Orientation Adjustments
+   =================================== */
+@media (orientation: landscape) and (max-height: 500px) {
+  :root {
+    --bottom-nav-height: 48px;
+    --header-height: 48px;
+  }
+
+  .mobile-modal {
+    padding: var(--spacing-sm);
+  }
+}
+
+/* ===================================
+   Standalone PWA Mode
+   =================================== */
+@media (display-mode: standalone) {
+  /* Extra padding when running as PWA */
+  body {
+    background: #0a0a0a;
+  }
+
+  /* Hide browser UI elements */
+  .browser-only {
+    display: none !important;
+  }
+}
+
+/* iOS specific fixes */
+@supports (-webkit-touch-callout: none) {
+  /* iOS Safari specific styles */
+  body {
+    /* Prevent iOS bounce effect */
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ===================================
+   Dark Mode Theme Variables
+   =================================== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #1a1a2e;
+    --bg-card: #16213e;
+    --text-primary: #ffffff;
+    --text-secondary: #94a3b8;
+    --accent-primary: #dc2626;
+    --accent-secondary: #e94560;
+  }
+}
+
+/* ===================================
+   High Contrast Mode
+   =================================== */
+@media (prefers-contrast: high) {
+  :root {
+    --text-primary: #ffffff;
+    --text-secondary: #e0e0e0;
+    --accent-primary: #ff4444;
+  }
+
+  .card-hover,
+  .bg-gradient-card {
+    border-width: 2px;
+  }
+}

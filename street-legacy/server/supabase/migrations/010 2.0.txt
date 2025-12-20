@@ -1,0 +1,1090 @@
+-- Street Legacy: Job and Mission Functions Migration (Fully Optimized)
+-- Migration: 010_job_mission_functions
+-- Description: SECURITY DEFINER functions for jobs and mission system with full optimization
+
+-- =============================================================================
+-- DROP EXISTING FUNCTIONS FIRST
+-- =============================================================================
+
+DROP FUNCTION IF EXISTS get_available_jobs(UUID);
+DROP FUNCTION IF EXISTS complete_job(CHARACTER VARYING);
+DROP FUNCTION IF EXISTS get_job_history(UUID,INT,INT,BOOLEAN);
+DROP FUNCTION IF EXISTS get_player_missions(UUID,mission_status_enum,mission_type_enum,mission_category_enum);
+DROP FUNCTION IF EXISTS update_mission_progress(UUID,CHARACTER VARYING,JSONB);
+DROP FUNCTION IF EXISTS claim_mission_reward(UUID);
+DROP FUNCTION IF EXISTS start_mission(UUID);
+DROP FUNCTION IF EXISTS reset_daily_missions();
+DROP FUNCTION IF EXISTS reset_weekly_missions();
+DROP FUNCTION IF EXISTS assign_player_missions(UUID);
+DROP FUNCTION IF EXISTS get_job_stats(UUID);
+
+-- =============================================================================
+-- GET AVAILABLE JOBS
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION get_available_jobs(p_player_id UUID DEFAULT NULL)
+RETURNS TABLE (
+  id VARCHAR,
+  name VARCHAR,
+  description TEXT,
+  category job_category_enum,
+  base_payout BIGINT,
+  calculated_payout BIGINT,
+  energy_cost INT,
+  xp_reward INT,
+  cooldown_seconds INT,
+  required_level INT,
+  required_rep_business INT,
+  player_can_work BOOLEAN,
+  is_on_cooldown BOOLEAN,
+  cooldown_remaining_seconds INT,
+  reason_unavailable TEXT
+) AS $$
+DECLARE
+  v_player_id UUID;
+  v_player_level INT;
+  v_player_rep_business INT;
+  v_current_district_id VARCHAR;
+  v_district_economy NUMERIC;
+BEGIN
+  v_player_id := COALESCE(p_player_id, current_player_id());
+
+  SELECT level, rep_business, current_district_id 
+  INTO v_player_level, v_player_rep_business, v_current_district_id
+  FROM players 
+  WHERE id = v_player_id;
+
+  SELECT COALESCE(economy_level, 50) INTO v_district_economy
+  FROM districts 
+  WHERE id = v_current_district_id;
+
+  RETURN QUERY
+  WITH cooldowns AS (
+    SELECT 
+      'job:' || jt.id as cooldown_key,
+      has_cooldown(v_player_id, 'job:' || jt.id) as is_on_cooldown,
+      get_cooldown_remaining(v_player_id, 'job:' || jt.id) as cooldown_remaining
+    FROM job_types jt
+    WHERE jt.is_active = TRUE
+  )
+  SELECT
+    jt.id,
+    jt.name,
+    jt.description,
+    jt.category,
+    jt.payout AS base_payout,
+    FLOOR(jt.payout * (1 + v_player_level * 0.05) * (v_district_economy / 50.0))::BIGINT AS calculated_payout,
+    jt.energy_cost,
+    jt.xp_reward,
+    jt.cooldown_seconds,
+    jt.required_level,
+    COALESCE(jt.required_rep_business, 0) as required_rep_business,
+    (
+      v_player_level >= jt.required_level
+      AND v_player_rep_business >= COALESCE(jt.required_rep_business, 0)
+    ) AS player_can_work,
+    c.is_on_cooldown,
+    c.cooldown_remaining,
+    CASE
+      WHEN v_player_level < jt.required_level THEN 'Requires level ' || jt.required_level
+      WHEN v_player_rep_business < COALESCE(jt.required_rep_business, 0) THEN 'Requires ' || COALESCE(jt.required_rep_business, 0) || ' business rep'
+      ELSE NULL
+    END AS reason_unavailable
+  FROM job_types jt
+  LEFT JOIN cooldowns c ON c.cooldown_key = 'job:' || jt.id
+  WHERE jt.is_active = TRUE
+  ORDER BY jt.required_level, jt.payout;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION get_available_jobs IS 'Lists all jobs with player eligibility and cooldown status';
+
+-- =============================================================================
+-- COMPLETE JOB
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION complete_job(p_job_type_id VARCHAR(50))
+RETURNS TABLE (
+  success BOOLEAN,
+  payout BIGINT,
+  xp_gained INT,
+  message TEXT,
+  leveled_up BOOLEAN,
+  new_level INT
+) AS $$
+DECLARE
+  v_player_id UUID;
+  v_player RECORD;
+  v_job_type RECORD;
+  v_district_economy NUMERIC;
+  v_payout BIGINT;
+  v_xp INT;
+  v_level_result RECORD;
+  v_leveled_up BOOLEAN := FALSE;
+  v_new_level INT;
+  v_error_code VARCHAR(50);
+  v_error_message TEXT;
+BEGIN
+  v_player_id := current_player_id();
+
+  IF v_player_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated' USING ERRCODE = 'not_authenticated';
+  END IF;
+
+  BEGIN
+    SELECT * INTO v_job_type FROM job_types WHERE id = p_job_type_id AND is_active = TRUE;
+    
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Invalid job type: %', p_job_type_id 
+        USING ERRCODE = 'invalid_job_type';
+    END IF;
+
+    LOCK TABLE players IN ROW EXCLUSIVE MODE;
+    
+    SELECT * INTO v_player FROM players WHERE id = v_player_id FOR UPDATE SKIP LOCKED;
+    
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Player not found' USING ERRCODE = 'player_not_found';
+    END IF;
+
+    SELECT COALESCE(economy_level, 50) INTO v_district_economy
+    FROM districts WHERE id = v_player.current_district_id;
+
+    IF v_player.level < v_job_type.required_level THEN
+      RAISE EXCEPTION 'You need to be level % to do this job', v_job_type.required_level 
+        USING ERRCODE = 'level_requirement';
+    END IF;
+
+    IF v_player.rep_business < COALESCE(v_job_type.required_rep_business, 0) THEN
+      RAISE EXCEPTION 'You need % business reputation to do this job', v_job_type.required_rep_business 
+        USING ERRCODE = 'rep_requirement';
+    END IF;
+
+    IF has_cooldown(v_player_id, 'job:' || p_job_type_id) THEN
+      RAISE EXCEPTION 'Job on cooldown. Wait % more seconds.',
+        get_cooldown_remaining(v_player_id, 'job:' || p_job_type_id)
+        USING ERRCODE = 'job_cooldown';
+    END IF;
+
+    PERFORM update_player_energy(v_player_id);
+    SELECT energy INTO v_player.energy FROM players WHERE id = v_player_id;
+
+    IF v_player.energy < v_job_type.energy_cost THEN
+      RAISE EXCEPTION 'Not enough energy. Need: %, Have: %', v_job_type.energy_cost, v_player.energy 
+        USING ERRCODE = 'insufficient_energy';
+    END IF;
+
+    v_payout := FLOOR(v_job_type.payout * (1 + v_player.level * 0.05) * (v_district_economy / 50.0))::BIGINT;
+    v_xp := v_job_type.xp_reward;
+
+    PERFORM consume_energy(v_player_id, v_job_type.energy_cost, 'job');
+    PERFORM set_cooldown(v_player_id, 'job:' || p_job_type_id, v_job_type.cooldown_seconds);
+
+    PERFORM modify_player_balance(
+      v_player_id,
+      v_payout,
+      'cash',
+      'job',
+      v_job_type.name || ' completed',
+      NULL,
+      NULL,
+      NULL,
+      NULL
+    );
+
+    UPDATE players SET last_job_at = NOW() WHERE id = v_player_id;
+
+    SELECT * INTO v_level_result FROM add_player_xp(v_player_id, v_xp, 'job');
+    v_leveled_up := v_level_result.leveled_up;
+    v_new_level := v_level_result.new_level;
+
+    PERFORM add_player_reputation(v_player_id, 'legit', GREATEST(1, (v_payout / 200)::INT), 'job');
+
+    INSERT INTO job_logs (player_id, job_type_id, district_id, payout, xp_gained, energy_spent)
+    VALUES (v_player_id, p_job_type_id, v_player.current_district_id, v_payout, v_xp, v_job_type.energy_cost);
+
+    INSERT INTO game_events (player_id, event_type, event_subtype, district_id, value_numeric, metadata)
+    VALUES (v_player_id, 'job', 'completed', v_player.current_district_id, v_payout,
+      jsonb_build_object('job_type', p_job_type_id, 'payout', v_payout, 'xp', v_xp));
+
+    PERFORM update_mission_progress(v_player_id, 'complete_job',
+      jsonb_build_object('job_type', p_job_type_id, 'payout', v_payout));
+
+    RETURN QUERY SELECT
+      TRUE,
+      v_payout,
+      v_xp,
+      ('Completed ' || v_job_type.name || ' and earned $' || v_payout)::TEXT,
+      v_leveled_up,
+      v_new_level;
+
+  EXCEPTION
+    WHEN others THEN
+      GET STACKED DIAGNOSTICS 
+        v_error_code = RETURNED_SQLSTATE,
+        v_error_message = MESSAGE_TEXT;
+      RAISE EXCEPTION '%', v_error_message 
+        USING ERRCODE = v_error_code;
+  END;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION complete_job IS 'Completes a job and grants payment and XP with transaction safety';
+
+-- =============================================================================
+-- GET JOB HISTORY
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION get_job_history(
+  p_player_id UUID DEFAULT NULL,
+  p_limit INT DEFAULT 20,
+  p_offset INT DEFAULT 0,
+  p_include_total BOOLEAN DEFAULT FALSE
+)
+RETURNS TABLE (
+  id UUID,
+  job_type_id VARCHAR,
+  job_name VARCHAR,
+  district_id VARCHAR,
+  district_name VARCHAR,
+  payout BIGINT,
+  xp_gained INT,
+  completed_at TIMESTAMPTZ,
+  total_count BIGINT
+) AS $$
+DECLARE
+  v_player_id UUID;
+  v_total BIGINT := 0;
+BEGIN
+  v_player_id := COALESCE(p_player_id, current_player_id());
+
+  IF p_include_total THEN
+    SELECT COUNT(*) INTO v_total
+    FROM job_logs jl
+    WHERE jl.player_id = v_player_id;
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    jl.id,
+    jl.job_type_id,
+    jt.name AS job_name,
+    jl.district_id,
+    d.name AS district_name,
+    jl.payout,
+    jl.xp_gained,
+    jl.completed_at,
+    v_total
+  FROM job_logs jl
+  JOIN job_types jt ON jt.id = jl.job_type_id
+  JOIN districts d ON d.id = jl.district_id
+  WHERE jl.player_id = v_player_id
+  ORDER BY jl.completed_at DESC
+  LIMIT p_limit
+  OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION get_job_history IS 'Returns job completion history for a player with pagination support';
+
+-- =============================================================================
+-- GET PLAYER MISSIONS
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION get_player_missions(
+  p_player_id UUID DEFAULT NULL,
+  p_status mission_status_enum DEFAULT NULL,
+  p_type mission_type_enum DEFAULT NULL,
+  p_category mission_category_enum DEFAULT NULL
+)
+RETURNS TABLE (
+  id UUID,
+  mission_id VARCHAR,
+  mission_name VARCHAR,
+  mission_description TEXT,
+  mission_type mission_type_enum,
+  category mission_category_enum,
+  status mission_status_enum,
+  progress JSONB,
+  requirements JSONB,
+  rewards JSONB,
+  required_level INT,
+  is_repeatable BOOLEAN,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  sort_order INT,
+  time_remaining INTERVAL
+) AS $$
+DECLARE
+  v_player_id UUID;
+BEGIN
+  v_player_id := COALESCE(p_player_id, current_player_id());
+
+  RETURN QUERY
+  SELECT
+    pm.id,
+    pm.mission_id,
+    m.name AS mission_name,
+    m.description AS mission_description,
+    m.mission_type,
+    m.category,
+    pm.status,
+    pm.progress,
+    m.requirements,
+    m.rewards,
+    m.required_level,
+    m.is_repeatable,
+    pm.started_at,
+    pm.completed_at,
+    pm.expires_at,
+    m.sort_order,
+    CASE 
+      WHEN pm.expires_at IS NOT NULL AND pm.status = 'active' 
+      THEN pm.expires_at - NOW()
+      ELSE NULL 
+    END AS time_remaining
+  FROM player_missions pm
+  JOIN missions m ON m.id = pm.mission_id
+  WHERE pm.player_id = v_player_id
+    AND (p_status IS NULL OR pm.status = p_status)
+    AND (p_type IS NULL OR m.mission_type = p_type)
+    AND (p_category IS NULL OR m.category = p_category)
+  ORDER BY
+    CASE pm.status
+      WHEN 'active' THEN 1
+      WHEN 'completed' THEN 2
+      WHEN 'available' THEN 3
+      ELSE 4
+    END,
+    m.sort_order,
+    pm.expires_at ASC NULLS LAST;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION get_player_missions IS 'Returns all missions for a player with filtering options';
+
+-- =============================================================================
+-- UPDATE MISSION PROGRESS (Fixed with BEGIN/RETURN QUERY pattern)
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION update_mission_progress(
+  p_player_id UUID,
+  p_action_type VARCHAR(50),
+  p_action_data JSONB DEFAULT '{}'::jsonb
+)
+RETURNS TABLE (
+  mission_id VARCHAR,
+  mission_name VARCHAR,
+  status_changed BOOLEAN,
+  new_status mission_status_enum,
+  progress JSONB
+) AS $$
+DECLARE
+  v_increment_amount INT;
+  v_success_required BOOLEAN;
+  v_is_success BOOLEAN;
+BEGIN
+  -- Determine increment amount
+  IF p_action_type = 'complete_job' THEN
+    v_increment_amount := 1;
+  ELSIF p_action_type = 'complete_crime' THEN
+    v_success_required := COALESCE((p_action_data->>'require_success')::BOOLEAN, FALSE);
+    v_is_success := (p_action_data->>'result') = 'success';
+    IF v_success_required AND NOT v_is_success THEN
+      v_increment_amount := 0;
+    ELSE
+      v_increment_amount := 1;
+    END IF;
+  ELSIF p_action_type IN ('buy_property', 'travel_district', 'open_business', 'claim_mission') THEN
+    v_increment_amount := 1;
+  ELSIF p_action_type = 'collect_income' THEN
+    v_increment_amount := COALESCE((p_action_data->>'amount')::INT, 1);
+  ELSIF p_action_type = 'earn_from_business' THEN
+    v_increment_amount := COALESCE((p_action_data->>'amount')::INT, 0);
+  ELSE
+    v_increment_amount := 1;
+  END IF;
+
+  RETURN QUERY
+  WITH increment_cte AS (
+    SELECT v_increment_amount as value
+  ),
+  updated_missions AS (
+    UPDATE player_missions pm
+    SET 
+      progress = jsonb_set(
+        COALESCE(pm.progress, '{}'::jsonb),
+        ARRAY[p_action_type],
+        to_jsonb(
+          COALESCE((pm.progress->>p_action_type)::INT, 0) + (SELECT value FROM increment_cte)
+        ),
+        true
+      ),
+      updated_at = NOW()
+    FROM missions m
+    WHERE pm.player_id = p_player_id
+      AND pm.status = 'active'
+      AND pm.mission_id = m.id
+      AND EXISTS (
+        SELECT 1 
+        FROM jsonb_array_elements(m.requirements) r
+        WHERE r->>'type' = p_action_type
+      )
+    RETURNING 
+      pm.id,
+      pm.mission_id,
+      m.name as mission_name,
+      pm.progress,
+      m.requirements
+  ),
+  completed_check AS (
+    SELECT 
+      um.id,
+      um.mission_id,
+      um.mission_name,
+      um.progress,
+      NOT EXISTS (
+        SELECT 1 
+        FROM jsonb_array_elements(um.requirements) r
+        WHERE COALESCE((um.progress->>(r->>'type'))::INT, 0) < 
+              COALESCE((r->>'count')::INT, 1)
+      ) as is_complete
+    FROM updated_missions um
+  ),
+  marked_completed AS (
+    UPDATE player_missions pm
+    SET 
+      status = 'completed',
+      completed_at = NOW(),
+      updated_at = NOW()
+    FROM completed_check cc
+    WHERE pm.id = cc.id
+      AND cc.is_complete = true
+      AND pm.status = 'active'
+    RETURNING 
+      pm.mission_id,
+      (SELECT cc.mission_name FROM completed_check cc WHERE cc.id = pm.id) as mission_name,
+      pm.progress
+  ),
+  logged_events AS (
+    INSERT INTO game_events (player_id, event_type, event_subtype, metadata)
+    SELECT 
+      p_player_id,
+      'mission',
+      'completed',
+      jsonb_build_object(
+        'mission_id', mc.mission_id,
+        'name', mc.mission_name,
+        'progress', mc.progress
+      )
+    FROM marked_completed mc
+  )
+  SELECT 
+    mc.mission_id,
+    mc.mission_name,
+    true as status_changed,
+    'completed'::mission_status_enum as new_status,
+    mc.progress
+  FROM marked_completed mc;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION update_mission_progress IS 'Fully set-based mission progress update with no loops';
+
+-- =============================================================================
+-- CLAIM MISSION REWARD
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION claim_mission_reward(p_player_mission_id UUID)
+RETURNS TABLE (
+  success BOOLEAN,
+  cash_reward BIGINT,
+  xp_reward INT,
+  rep_street_reward INT,
+  rep_legit_reward INT,
+  items_granted TEXT[],
+  message TEXT,
+  leveled_up BOOLEAN,
+  new_level INT,
+  next_mission_id VARCHAR
+) AS $$
+DECLARE
+  v_player_id UUID;
+  v_player_mission RECORD;
+  v_rewards JSONB;
+  v_cash BIGINT := 0;
+  v_xp INT := 0;
+  v_rep_street INT := 0;
+  v_rep_legit INT := 0;
+  v_items TEXT[] := '{}';
+  v_level_result RECORD;
+  v_leveled_up BOOLEAN := FALSE;
+  v_new_level INT;
+  v_next_mission_id VARCHAR;
+  v_error_code VARCHAR(50);
+  v_error_message TEXT;
+BEGIN
+  v_player_id := current_player_id();
+
+  IF v_player_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated' USING ERRCODE = 'not_authenticated';
+  END IF;
+
+  BEGIN
+    SELECT pm.*, m.rewards, m.name AS mission_name, m.mission_type, m.sort_order
+    INTO v_player_mission
+    FROM player_missions pm
+    JOIN missions m ON m.id = pm.mission_id
+    WHERE pm.id = p_player_mission_id AND pm.player_id = v_player_id
+    FOR UPDATE OF pm SKIP LOCKED;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Mission not found' USING ERRCODE = 'mission_not_found';
+    END IF;
+
+    IF v_player_mission.status != 'completed' THEN
+      RAISE EXCEPTION 'Mission is not completed. Status: %', v_player_mission.status 
+        USING ERRCODE = 'mission_not_completed';
+    END IF;
+
+    v_rewards := v_player_mission.rewards;
+
+    v_cash := COALESCE((v_rewards->>'cash')::BIGINT, 0);
+    v_xp := COALESCE((v_rewards->>'xp')::INT, 0);
+    v_rep_street := COALESCE((v_rewards->>'rep_street')::INT, 
+                            COALESCE((v_rewards->>'rep_crime')::INT, 0));
+    v_rep_legit := COALESCE((v_rewards->>'rep_legit')::INT, 
+                           COALESCE((v_rewards->>'rep_business')::INT, 0));
+
+    IF v_cash > 0 THEN
+      PERFORM modify_player_balance(
+        v_player_id,
+        v_cash,
+        'cash',
+        'mission',
+        'Reward: ' || v_player_mission.mission_name,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+      );
+    END IF;
+
+    IF v_xp > 0 THEN
+      SELECT * INTO v_level_result FROM add_player_xp(v_player_id, v_xp, 'mission');
+      v_leveled_up := v_level_result.leveled_up;
+      v_new_level := v_level_result.new_level;
+    ELSE
+      SELECT level INTO v_new_level FROM players WHERE id = v_player_id;
+    END IF;
+
+    IF v_rep_street > 0 THEN
+      PERFORM add_player_reputation(v_player_id, 'street', v_rep_street, 'mission');
+    END IF;
+    
+    IF v_rep_legit > 0 THEN
+      PERFORM add_player_reputation(v_player_id, 'legit', v_rep_legit, 'mission');
+    END IF;
+
+    IF v_rewards->'items' IS NOT NULL AND jsonb_array_length(v_rewards->'items') > 0 THEN
+      WITH items_to_grant AS (
+        SELECT 
+          item->>'id' as item_id,
+          COALESCE((item->>'quantity')::INT, 1) as quantity
+        FROM jsonb_array_elements(v_rewards->'items') item
+      )
+      INSERT INTO player_inventory (player_id, item_id, quantity, acquired_via)
+      SELECT 
+        v_player_id,
+        itg.item_id,
+        itg.quantity,
+        'reward'
+      FROM items_to_grant itg
+      ON CONFLICT (player_id, item_id)
+      DO UPDATE SET 
+        quantity = player_inventory.quantity + EXCLUDED.quantity,
+        updated_at = NOW();
+
+      SELECT array_agg(item->>'id')
+      INTO v_items
+      FROM jsonb_array_elements(v_rewards->'items') item;
+    END IF;
+
+    UPDATE player_missions
+    SET 
+      status = 'claimed',
+      claimed_at = NOW(),
+      updated_at = NOW()
+    WHERE id = p_player_mission_id;
+
+    IF v_player_mission.mission_type = 'onboarding' THEN
+      UPDATE player_missions pm
+      SET 
+        status = 'active',
+        started_at = NOW(),
+        updated_at = NOW()
+      FROM missions m
+      WHERE pm.mission_id = m.id
+      AND pm.player_id = v_player_id
+      AND pm.status = 'available'
+      AND m.mission_type = 'onboarding'
+      AND m.sort_order = v_player_mission.sort_order + 1
+      RETURNING pm.mission_id INTO v_next_mission_id;
+    END IF;
+
+    INSERT INTO game_events (player_id, event_type, event_subtype, value_numeric, metadata)
+    VALUES (v_player_id, 'mission', 'claimed', v_cash,
+      jsonb_build_object(
+        'mission_id', v_player_mission.mission_id,
+        'mission_name', v_player_mission.mission_name,
+        'rewards', v_rewards
+      ));
+
+    RETURN QUERY SELECT
+      TRUE,
+      v_cash,
+      v_xp,
+      v_rep_street,
+      v_rep_legit,
+      v_items,
+      ('Claimed rewards for: ' || v_player_mission.mission_name)::TEXT,
+      v_leveled_up,
+      v_new_level,
+      v_next_mission_id;
+
+  EXCEPTION
+    WHEN others THEN
+      GET STACKED DIAGNOSTICS v_error_code = RETURNED_SQLSTATE,
+                              v_error_message = MESSAGE_TEXT;
+      RAISE EXCEPTION '%', v_error_message USING ERRCODE = v_error_code;
+  END;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION claim_mission_reward IS 'Claims rewards for a completed mission with transaction safety';
+
+-- =============================================================================
+-- START MISSION
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION start_mission(p_player_mission_id UUID)
+RETURNS TABLE (
+  success BOOLEAN,
+  mission_id VARCHAR,
+  mission_name VARCHAR,
+  message TEXT
+) AS $$
+DECLARE
+  v_player_id UUID;
+  v_player_mission RECORD;
+  v_player RECORD;
+  v_active_mission_count INT;
+  v_max_active_missions INT := 5;
+  v_error_code VARCHAR(50);
+  v_error_message TEXT;
+BEGIN
+  v_player_id := current_player_id();
+
+  IF v_player_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated' USING ERRCODE = 'not_authenticated';
+  END IF;
+
+  BEGIN
+    SELECT pm.*, m.name AS mission_name, m.required_level, m.required_missions, m.time_limit_minutes, m.mission_type
+    INTO v_player_mission
+    FROM player_missions pm
+    JOIN missions m ON m.id = pm.mission_id
+    WHERE pm.id = p_player_mission_id AND pm.player_id = v_player_id
+    FOR UPDATE OF pm SKIP LOCKED;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Mission not found' USING ERRCODE = 'mission_not_found';
+    END IF;
+
+    IF v_player_mission.status != 'available' THEN
+      RAISE EXCEPTION 'Mission is not available. Status: %', v_player_mission.status 
+        USING ERRCODE = 'mission_not_available';
+    END IF;
+
+    SELECT * INTO v_player FROM players WHERE id = v_player_id;
+
+    IF v_player.level < v_player_mission.required_level THEN
+      RAISE EXCEPTION 'You need to be level % to start this mission', v_player_mission.required_level 
+        USING ERRCODE = 'level_requirement';
+    END IF;
+
+    IF v_player_mission.mission_type != 'onboarding' THEN
+      SELECT COUNT(*) INTO v_active_mission_count
+      FROM player_missions pm
+      JOIN missions m ON m.id = pm.mission_id
+      WHERE pm.player_id = v_player_id
+        AND pm.status = 'active'
+        AND m.mission_type != 'onboarding';
+
+      IF v_active_mission_count >= v_max_active_missions THEN
+        RAISE EXCEPTION 'You can only have % active missions at a time', v_max_active_missions 
+          USING ERRCODE = 'active_mission_limit';
+      END IF;
+    END IF;
+
+    IF v_player_mission.required_missions IS NOT NULL AND array_length(v_player_mission.required_missions, 1) > 0 THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM player_missions pm
+        WHERE pm.player_id = v_player_id
+        AND pm.mission_id = ANY(v_player_mission.required_missions)
+        AND pm.status = 'claimed'
+      ) THEN
+        RAISE EXCEPTION 'You must complete prerequisite missions first' 
+          USING ERRCODE = 'prerequisite_required';
+      END IF;
+    END IF;
+
+    UPDATE player_missions
+    SET
+      status = 'active',
+      started_at = NOW(),
+      progress = '{}'::jsonb,
+      expires_at = CASE
+        WHEN v_player_mission.time_limit_minutes IS NOT NULL
+        THEN NOW() + (v_player_mission.time_limit_minutes || ' minutes')::INTERVAL
+        ELSE NULL
+      END,
+      updated_at = NOW()
+    WHERE id = p_player_mission_id;
+
+    INSERT INTO game_events (player_id, event_type, event_subtype, metadata)
+    VALUES (v_player_id, 'mission', 'started',
+      jsonb_build_object(
+        'mission_id', v_player_mission.mission_id,
+        'name', v_player_mission.mission_name,
+        'type', v_player_mission.mission_type
+      ));
+
+    RETURN QUERY SELECT
+      TRUE,
+      v_player_mission.mission_id,
+      v_player_mission.mission_name,
+      ('Started mission: ' || v_player_mission.mission_name)::TEXT;
+
+  EXCEPTION
+    WHEN others THEN
+      GET STACKED DIAGNOSTICS v_error_code = RETURNED_SQLSTATE,
+                              v_error_message = MESSAGE_TEXT;
+      RAISE EXCEPTION '%', v_error_message USING ERRCODE = v_error_code;
+  END;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION start_mission IS 'Starts an available mission with active mission limit check';
+
+-- =============================================================================
+-- RESET DAILY MISSIONS
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION reset_daily_missions()
+RETURNS TABLE (missions_reset INT, missions_expired INT) AS $$
+BEGIN
+  RETURN QUERY
+  WITH reset AS (
+    UPDATE player_missions pm
+    SET
+      status = 'available',
+      progress = '{}'::jsonb,
+      started_at = NULL,
+      completed_at = NULL,
+      claimed_at = NULL,
+      expires_at = NULL,
+      updated_at = NOW()
+    FROM missions m
+    WHERE pm.mission_id = m.id
+    AND m.mission_type = 'daily'
+    AND m.is_repeatable = TRUE
+    AND pm.status = 'claimed'
+    AND pm.claimed_at < CURRENT_DATE
+    RETURNING pm.id
+  ),
+  expired AS (
+    UPDATE player_missions
+    SET 
+      status = 'expired',
+      updated_at = NOW()
+    WHERE status = 'active'
+    AND expires_at IS NOT NULL
+    AND expires_at < NOW()
+    RETURNING id
+  )
+  SELECT 
+    (SELECT COALESCE(COUNT(*),0) FROM reset)::INT as missions_reset,
+    (SELECT COALESCE(COUNT(*),0) FROM expired)::INT as missions_expired;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION reset_daily_missions IS 'Resets daily missions and expires timed missions for all players';
+
+-- =============================================================================
+-- RESET WEEKLY MISSIONS
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION reset_weekly_missions()
+RETURNS TABLE (missions_reset INT) AS $$
+DECLARE
+  v_week_start DATE := date_trunc('week', CURRENT_DATE)::DATE;
+BEGIN
+  RETURN QUERY
+  WITH reset AS (
+    UPDATE player_missions pm
+    SET
+      status = 'available',
+      progress = '{}'::jsonb,
+      started_at = NULL,
+      completed_at = NULL,
+      claimed_at = NULL,
+      expires_at = NULL,
+      updated_at = NOW()
+    FROM missions m
+    WHERE pm.mission_id = m.id
+    AND m.mission_type = 'weekly'
+    AND m.is_repeatable = TRUE
+    AND pm.status = 'claimed'
+    AND pm.claimed_at < v_week_start
+    RETURNING pm.id
+  )
+  SELECT (SELECT COALESCE(COUNT(*),0) FROM reset)::INT as missions_reset;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION reset_weekly_missions IS 'Resets weekly missions for all players';
+
+-- =============================================================================
+-- ASSIGN MISSIONS TO PLAYER (Using debugger's fixed pattern)
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION assign_player_missions(p_player_id UUID)
+RETURNS TABLE (
+  onboarding_assigned INT,
+  daily_assigned INT,
+  weekly_assigned INT,
+  story_assigned INT,
+  total_assigned INT
+) AS $$
+BEGIN
+  RETURN QUERY
+  WITH onboarding_to_insert AS (
+    SELECT
+      p_player_id AS player_id,
+      m.id AS mission_id,
+      CASE WHEN m.sort_order = 1 THEN 'active' ELSE 'available' END AS status,
+      CASE WHEN m.sort_order = 1 THEN NOW() ELSE NULL END AS started_at
+    FROM missions m
+    WHERE m.mission_type = 'onboarding'
+      AND m.is_active = TRUE
+      AND NOT EXISTS (
+        SELECT 1 
+        FROM player_missions pm
+        WHERE pm.player_id = p_player_id
+          AND pm.mission_id = m.id
+      )
+    ORDER BY m.sort_order
+  ),
+  inserted_onboarding AS (
+    INSERT INTO player_missions (player_id, mission_id, status, started_at)
+    SELECT player_id, mission_id, status, started_at
+    FROM onboarding_to_insert
+    ON CONFLICT (player_id, mission_id) DO NOTHING
+    RETURNING 1
+  ),
+  daily_to_insert AS (
+    SELECT
+      p_player_id AS player_id,
+      m.id AS mission_id,
+      'available' AS status
+    FROM missions m
+    WHERE m.mission_type = 'daily'
+      AND m.is_active = TRUE
+      AND NOT EXISTS (
+        SELECT 1 
+        FROM player_missions pm
+        WHERE pm.player_id = p_player_id
+          AND pm.mission_id = m.id
+      )
+  ),
+  inserted_daily AS (
+    INSERT INTO player_missions (player_id, mission_id, status)
+    SELECT player_id, mission_id, status
+    FROM daily_to_insert
+    ON CONFLICT (player_id, mission_id) DO NOTHING
+    RETURNING 1
+  ),
+  weekly_to_insert AS (
+    SELECT
+      p_player_id AS player_id,
+      m.id AS mission_id,
+      'available' AS status
+    FROM missions m
+    WHERE m.mission_type = 'weekly'
+      AND m.is_active = TRUE
+      AND NOT EXISTS (
+        SELECT 1 
+        FROM player_missions pm
+        WHERE pm.player_id = p_player_id
+          AND pm.mission_id = m.id
+      )
+  ),
+  inserted_weekly AS (
+    INSERT INTO player_missions (player_id, mission_id, status)
+    SELECT player_id, mission_id, status
+    FROM weekly_to_insert
+    ON CONFLICT (player_id, mission_id) DO NOTHING
+    RETURNING 1
+  ),
+  story_to_insert AS (
+    SELECT
+      p_player_id AS player_id,
+      m.id AS mission_id,
+      'available' AS status
+    FROM missions m
+    WHERE m.mission_type = 'story'
+      AND m.is_active = TRUE
+      AND NOT EXISTS (
+        SELECT 1 
+        FROM player_missions pm
+        WHERE pm.player_id = p_player_id
+          AND pm.mission_id = m.id
+      )
+  ),
+  inserted_story AS (
+    INSERT INTO player_missions (player_id, mission_id, status)
+    SELECT player_id, mission_id, status
+    FROM story_to_insert
+    ON CONFLICT (player_id, mission_id) DO NOTHING
+    RETURNING 1
+  )
+  SELECT 
+    (SELECT COALESCE(COUNT(*),0) FROM inserted_onboarding)::INT AS onboarding_assigned,
+    (SELECT COALESCE(COUNT(*),0) FROM inserted_daily)::INT AS daily_assigned,
+    (SELECT COALESCE(COUNT(*),0) FROM inserted_weekly)::INT AS weekly_assigned,
+    (SELECT COALESCE(COUNT(*),0) FROM inserted_story)::INT AS story_assigned,
+    (
+      (SELECT COALESCE(COUNT(*),0) FROM inserted_onboarding) +
+      (SELECT COALESCE(COUNT(*),0) FROM inserted_daily) +
+      (SELECT COALESCE(COUNT(*),0) FROM inserted_weekly) +
+      (SELECT COALESCE(COUNT(*),0) FROM inserted_story)
+    )::INT AS total_assigned;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION assign_player_missions IS 'Assigns all applicable missions to a player with no loops';
+
+-- =============================================================================
+-- GET JOB STATS
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION get_job_stats(p_player_id UUID DEFAULT NULL)
+RETURNS TABLE (
+  total_jobs_completed BIGINT,
+  total_earnings BIGINT,
+  total_xp_earned BIGINT,
+  favorite_job VARCHAR,
+  favorite_job_count BIGINT,
+  most_profitable_job VARCHAR,
+  most_profitable_earnings BIGINT,
+  avg_earnings_per_job NUMERIC,
+  jobs_today BIGINT,
+  earnings_today BIGINT
+) AS $$
+DECLARE
+  v_player_id UUID;
+  v_today_start TIMESTAMPTZ := date_trunc('day', NOW());
+BEGIN
+  v_player_id := COALESCE(p_player_id, current_player_id());
+
+  RETURN QUERY
+  WITH job_stats AS (
+    SELECT
+      COUNT(*) as total_count,
+      COALESCE(SUM(jl.payout), 0) as total_earnings,
+      COALESCE(SUM(jl.xp_gained), 0) as total_xp,
+      COALESCE(AVG(jl.payout), 0) as avg_payout
+    FROM job_logs jl
+    WHERE jl.player_id = v_player_id
+  ),
+  favorite_job_stats AS (
+    SELECT 
+      jt.name,
+      COUNT(*) as job_count
+    FROM job_logs jl
+    JOIN job_types jt ON jt.id = jl.job_type_id
+    WHERE jl.player_id = v_player_id
+    GROUP BY jt.name
+    ORDER BY job_count DESC
+    LIMIT 1
+  ),
+  profitable_job_stats AS (
+    SELECT 
+      jt.name,
+      SUM(jl.payout) as total_earnings
+    FROM job_logs jl
+    JOIN job_types jt ON jt.id = jl.job_type_id
+    WHERE jl.player_id = v_player_id
+    GROUP BY jt.name
+    ORDER BY total_earnings DESC
+    LIMIT 1
+  ),
+  today_stats AS (
+    SELECT
+      COUNT(*) as jobs_today,
+      COALESCE(SUM(payout), 0) as earnings_today
+    FROM job_logs
+    WHERE player_id = v_player_id
+      AND completed_at >= v_today_start
+  )
+  SELECT
+    js.total_count::BIGINT,
+    js.total_earnings::BIGINT,
+    js.total_xp::BIGINT,
+    fj.name,
+    fj.job_count::BIGINT,
+    pj.name,
+    pj.total_earnings::BIGINT,
+    js.avg_payout,
+    ts.jobs_today::BIGINT,
+    ts.earnings_today::BIGINT
+  FROM job_stats js
+  CROSS JOIN today_stats ts
+  LEFT JOIN favorite_job_stats fj ON TRUE
+  LEFT JOIN profitable_job_stats pj ON TRUE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION get_job_stats IS 'Returns comprehensive job statistics for a player';
+
+-- =============================================================================
+-- GRANT PERMISSIONS
+-- =============================================================================
+
+GRANT EXECUTE ON FUNCTION get_available_jobs TO authenticated;
+GRANT EXECUTE ON FUNCTION complete_job TO authenticated;
+GRANT EXECUTE ON FUNCTION get_job_history TO authenticated;
+GRANT EXECUTE ON FUNCTION get_player_missions TO authenticated;
+GRANT EXECUTE ON FUNCTION update_mission_progress TO authenticated;
+GRANT EXECUTE ON FUNCTION claim_mission_reward TO authenticated;
+GRANT EXECUTE ON FUNCTION start_mission TO authenticated;
+GRANT EXECUTE ON FUNCTION assign_player_missions TO authenticated;
+GRANT EXECUTE ON FUNCTION get_job_stats TO authenticated;
+
+-- =============================================================================
+-- CREATE INDEXES FOR PERFORMANCE
+-- =============================================================================
+
+CREATE INDEX IF NOT EXISTS idx_job_logs_player_id_completed ON job_logs(player_id, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_player_missions_player_status ON player_missions(player_id, status);
+CREATE INDEX IF NOT EXISTS idx_player_missions_mission_status ON player_missions(mission_id, status);
+CREATE INDEX IF NOT EXISTS idx_player_missions_expires ON player_missions(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_job_types_active ON job_types(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_missions_active_type ON missions(is_active, mission_type) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_player_missions_comprehensive ON player_missions(
+  player_id, 
+  status, 
+  mission_id
+) INCLUDE (started_at, completed_at, expires_at);

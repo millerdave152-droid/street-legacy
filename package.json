@@ -1,0 +1,50 @@
+{
+  "name": "street-legacy-backend",
+  "version": "1.0.0",
+  "description": "Street Legacy - A persistent multiplayer crime/business simulation game set in Toronto",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "db:migrate": "supabase db push",
+    "db:reset": "supabase db reset",
+    "db:seed": "supabase db reset --seed",
+    "db:diff": "supabase db diff",
+    "db:dump": "supabase db dump -f supabase/seed/dump.sql",
+    "functions:serve": "supabase functions serve",
+    "functions:deploy": "supabase functions deploy",
+    "functions:deploy:game-tick": "supabase functions deploy game-tick",
+    "functions:deploy:player-action": "supabase functions deploy player-action",
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:status": "supabase status",
+    "dev": "supabase start && supabase functions serve",
+    "lint": "eslint src/",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "supabase": "^1.123.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "simulation",
+    "supabase",
+    "toronto",
+    "phaser"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}

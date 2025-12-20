@@ -1,0 +1,22 @@
+{
+  "name": "street-legacy",
+  "version": "1.0.0",
+  "description": "Street Legacy - Pure Phaser 3 Game (NOT React)",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server",
+    "shared"
+  ],
+  "scripts": {
+    "game": "npm run dev -w client",
+    "game:build": "npm run build -w client",
+    "dev": "npm run dev -w client",
+    "dev:all": "concurrently \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w client"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "terser": "^5.44.1"
+  }
+}

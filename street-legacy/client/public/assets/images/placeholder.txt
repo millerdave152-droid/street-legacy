@@ -1,0 +1,59 @@
+# Street Legacy - Asset Placeholders
+# ==================================
+#
+# This directory contains placeholder files for game assets.
+# Replace these with actual assets before production deployment.
+#
+# Required Assets:
+# ================
+#
+# UI Elements (assets/images/ui/):
+# - panel.png         - UI panel background (9-slice compatible)
+# - button.png        - Default button state
+# - button-hover.png  - Button hover state
+# - icon-cash.png     - Cash/money icon (32x32)
+# - icon-health.png   - Health icon (32x32)
+# - icon-energy.png   - Energy icon (32x32)
+# - icon-heat.png     - Heat/wanted level icon (32x32)
+#
+# District Backgrounds (assets/images/districts/):
+# - downtown.png      - Downtown Toronto background (1920x1080)
+# - scarborough.png   - Scarborough background
+# - etobicoke.png     - Etobicoke background
+# - northyork.png     - North York background
+# - ... (one per district)
+#
+# Map Assets (assets/images/map/):
+# - toronto.png       - Toronto map image
+# - marker.png        - Location marker (32x32)
+# - marker-player.png - Player location marker (32x32)
+#
+# Action Icons (assets/images/icons/):
+# - crime.png         - Crime action icon (64x64)
+# - job.png           - Job action icon (64x64)
+# - property.png      - Property icon (64x64)
+# - inventory.png     - Inventory icon (64x64)
+# - crew.png          - Crew icon (64x64)
+# - bank.png          - Bank icon (64x64)
+# - map.png           - Map icon (64x64)
+#
+# Audio (assets/audio/):
+# - click.mp3         - UI click sound
+# - success.mp3       - Success/reward sound
+# - fail.mp3          - Failure sound
+# - levelup.mp3       - Level up fanfare
+# - ambient.mp3       - Background ambient music (loopable)
+#
+# Recommended Formats:
+# ====================
+# Images: PNG (with transparency where needed)
+# Audio: MP3 or OGG (MP3 for compatibility, OGG for quality)
+#
+# Asset Guidelines:
+# =================
+# - Use consistent color palette matching the game theme (#1a1a2e background)
+# - Icons should have transparent backgrounds
+# - District backgrounds should be dark/moody urban scenes
+# - Audio should be normalized to similar levels
+# - Keep file sizes reasonable for web delivery
+#

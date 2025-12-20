@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # DEVELOPMENT CLIENT (Vite + Phaser hot reload)
+  # ==========================================================================
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+      - VITE_APP_NAME=${VITE_APP_NAME:-Street Legacy}
+      - VITE_ENV=development
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+
+  # ==========================================================================
+  # PRODUCTION CLIENT (Nginx serving built assets)
+  # ==========================================================================
+  client-prod:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.prod
+      args:
+        - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+        - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+        - VITE_APP_NAME=${VITE_APP_NAME:-Street Legacy}
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+    profiles:
+      - production
+
+  # ==========================================================================
+  # SCHEDULER (Cron jobs for game maintenance)
+  # ==========================================================================
+  scheduler:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.scheduler
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SCHEDULER_SECRET=${SCHEDULER_SECRET}
+    restart: unless-stopped
+    profiles:
+      - with-scheduler
+
+  # ==========================================================================
+  # LOCAL POSTGRES (Optional - for offline development)
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-street_legacy}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-street_legacy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - local-db
+
+  # ==========================================================================
+  # REDIS (Optional - for caching)
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    profiles:
+      - with-cache
+
+volumes:
+  postgres_data:
+  redis_data:
+
+# ==========================================================================
+# USAGE:
+# ==========================================================================
+# Development:
+#   docker-compose up client
+#
+# Production:
+#   docker-compose --profile production up -d client-prod
+#
+# With scheduler:
+#   docker-compose --profile with-scheduler up -d
+#
+# Full stack with local DB:
+#   docker-compose --profile local-db --profile with-cache up
+# ==========================================================================

@@ -1,0 +1,1057 @@
+-- =============================================================================
+-- DYNAMIC CONTENT MANAGEMENT FUNCTIONS Migration: 012_seed_data
+-- =============================================================================
+
+-- 1. ROTATING DAILY MISSIONS FUNCTION
+-- Assigns random daily missions to players each day
+
+CREATE OR REPLACE FUNCTION assign_daily_missions()
+RETURNS TABLE (
+  player_id UUID,
+  missions_assigned INT
+) AS $$
+DECLARE
+  player_record RECORD;
+  daily_mission RECORD;
+  assigned_count INT;
+  available_daily_missions TEXT[];
+BEGIN
+  -- Get all active daily missions
+  SELECT ARRAY_AGG(id) INTO available_daily_missions
+  FROM missions 
+  WHERE mission_type = 'daily' 
+    AND is_repeatable = TRUE
+    AND required_level <= 50; -- Adjust as needed
+
+  IF available_daily_missions IS NULL OR array_length(available_daily_missions, 1) < 3 THEN
+    RAISE EXCEPTION 'Not enough daily missions available';
+  END IF;
+
+  -- Process all active players
+  FOR player_record IN 
+    SELECT id, level 
+    FROM players 
+    WHERE is_active = TRUE
+  LOOP
+    -- Clear previous daily missions
+    DELETE FROM player_missions 
+    WHERE player_id = player_record.id 
+      AND mission_id IN (
+        SELECT id FROM missions WHERE mission_type = 'daily'
+      )
+      AND status = 'available'
+      AND created_at < CURRENT_DATE;
+    
+    assigned_count := 0;
+    
+    -- Assign 3 random daily missions
+    FOR i IN 1..3 LOOP
+      -- Get random daily mission that player can access
+      WITH eligible_missions AS (
+        SELECT m.id, m.required_level
+        FROM missions m
+        WHERE m.mission_type = 'daily'
+          AND m.is_repeatable = TRUE
+          AND m.id = ANY(available_daily_missions)
+          AND m.required_level <= player_record.level
+          AND NOT EXISTS (
+            SELECT 1 FROM player_missions pm
+            WHERE pm.player_id = player_record.id
+              AND pm.mission_id = m.id
+              AND pm.status IN ('available', 'completed')
+              AND pm.created_at >= CURRENT_DATE - INTERVAL '1 hour'
+          )
+        ORDER BY RANDOM()
+        LIMIT 1
+      )
+      INSERT INTO player_missions (player_id, mission_id, status, expires_at)
+      SELECT 
+        player_record.id, 
+        em.id, 
+        'available',
+        CURRENT_DATE + INTERVAL '23 hours 59 minutes'
+      FROM eligible_missions em
+      ON CONFLICT DO NOTHING;
+      
+      IF FOUND THEN
+        assigned_count := assigned_count + 1;
+      END IF;
+    END LOOP;
+    
+    -- Return progress
+    player_id := player_record.id;
+    missions_assigned := assigned_count;
+    RETURN NEXT;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION assign_daily_missions IS 'Assigns random daily missions to all active players';
+
+-- =============================================================================
+-- 2. DYNAMIC DISTRICT EVENTS
+-- Creates random district events to keep the world alive
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION trigger_district_event()
+RETURNS TABLE (
+  district_id VARCHAR(50),
+  event_type VARCHAR(50),
+  description TEXT,
+  effects JSONB,
+  duration_hours INT,
+  message TEXT
+) AS $$
+DECLARE
+  random_district RECORD;
+  event_roll INT;
+  duration INT;
+  effect_json JSONB;
+BEGIN
+  -- Select random district (weighted by activity/importance)
+  SELECT d.* INTO random_district
+  FROM districts d
+  WHERE d.is_active = TRUE
+  ORDER BY 
+    (d.crime_rate * 0.3 + d.police_presence * 0.2 + d.economy_level * 0.5) * RANDOM()
+  LIMIT 1;
+  
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'No active districts found';
+  END IF;
+  
+  event_roll := floor(random() * 100);
+  
+  -- Determine event type based on roll
+  IF event_roll < 20 THEN
+    -- Police Crackdown
+    event_type := 'police_crackdown';
+    description := 'Increased police presence due to recent criminal activity.';
+    duration := 3 + floor(random() * 5); -- 3-7 hours
+    effect_json := jsonb_build_object(
+      'police_multiplier', 1.5,
+      'crime_success_reduction', 20,
+      'heat_increase', 25,
+      'business_income_reduction', 15
+    );
+    message := 'Police crackdown in ' || random_district.name || ' - be careful!';
+    
+  ELSIF event_roll < 40 THEN
+    -- Gang Turf War
+    event_type := 'gang_war';
+    description := 'Gang violence has erupted in the district.';
+    duration := 4 + floor(random() * 6); -- 4-9 hours
+    effect_json := jsonb_build_object(
+      'crime_success_reduction', 30,
+      'job_success_reduction', 20,
+      'heat_increase', 40,
+      'crew_activity_boost', 25,
+      'allows_pvp', true
+    );
+    message := 'Gang war in ' || random_district.name || ' - opportunity or danger?';
+    
+  ELSIF event_roll < 60 THEN
+    -- Economic Boom
+    event_type := 'economic_boom';
+    description := 'Economic growth is fueling opportunities.';
+    duration := 6 + floor(random() * 8); -- 6-13 hours
+    effect_json := jsonb_build_object(
+      'job_payout_bonus', 25,
+      'business_income_bonus', 30,
+      'property_value_increase', 15,
+      'crime_heat_reduction', 10
+    );
+    message := 'Economic boom in ' || random_district.name || ' - time to make money!';
+    
+  ELSIF event_roll < 80 THEN
+    -- Festival/Celebration
+    event_type := 'festival';
+    description := 'Street festival attracts crowds and distractions.';
+    duration := 5 + floor(random() * 7); -- 5-11 hours
+    effect_json := jsonb_build_object(
+      'pickpocket_success_bonus', 35,
+      'shoplifting_success_bonus', 25,
+      'police_distraction', 20,
+      'business_income_bonus', 40,
+      'heat_reduction', 15
+    );
+    message := 'Festival in ' || random_district.name || ' - crowds create opportunities!';
+    
+  ELSE
+    -- Natural Event (weather, etc.)
+    event_type := 'weather_event';
+    description := 'Severe weather conditions affecting the district.';
+    duration := 2 + floor(random() * 4); -- 2-5 hours
+    effect_json := jsonb_build_object(
+      'crime_success_reduction', 40,
+      'job_success_reduction', 30,
+      'travel_time_increase', 50,
+      'business_income_reduction', 25,
+      'heat_reduction', 30
+    );
+    message := 'Weather event in ' || random_district.name || ' - stay inside!';
+  END IF;
+  
+  -- Insert district event
+  INSERT INTO district_events (
+    district_id,
+    event_type,
+    description,
+    effects,
+    started_at,
+    expires_at,
+    is_active
+  ) VALUES (
+    random_district.id,
+    event_type,
+    description,
+    effect_json,
+    NOW(),
+    NOW() + (duration || ' hours')::INTERVAL,
+    TRUE
+  );
+  
+  -- Notify all players in the district
+  INSERT INTO player_messages (sender_id, recipient_id, subject, content)
+  SELECT 
+    '00000000-0000-0000-0000-000000000000', -- System sender
+    p.id,
+    'District Event: ' || random_district.name,
+    message
+  FROM players p
+  WHERE p.home_district_id = random_district.id
+    AND p.is_active = TRUE;
+  
+  -- Return event details
+  district_id := random_district.id;
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION trigger_district_event IS 'Creates random dynamic events in districts';
+
+-- =============================================================================
+-- 3. ITEM SHOP ROTATION
+-- Rotates available items in shops
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION rotate_shop_inventory()
+RETURNS TABLE (
+  shop_type VARCHAR(50),
+  items_rotated INT,
+  message TEXT
+) AS $$
+DECLARE
+  shop_record RECORD;
+  rotated_count INT;
+  eligible_items TEXT[];
+BEGIN
+  -- Define shop types and their eligible item categories
+  FOR shop_record IN 
+    SELECT * FROM (VALUES
+      ('weapons_dealer', 'weapon'),
+      ('tools_shop', 'tool'),
+      ('vehicle_dealer', 'vehicle'),
+      ('clothing_store', 'cosmetic'),
+      ('general_store', ARRAY['consumable', 'tool'])
+    ) AS shops(shop_type, categories)
+  LOOP
+    -- Clear current shop inventory
+    DELETE FROM shop_inventory 
+    WHERE shop_type = shop_record.shop_type 
+      AND restock_at < NOW();
+    
+    -- Get eligible items based on category
+    IF shop_record.categories = 'weapon' THEN
+      SELECT ARRAY_AGG(id) INTO eligible_items
+      FROM items 
+      WHERE category = 'weapon' 
+        AND rarity IN ('common', 'uncommon')
+        AND is_tradeable = TRUE;
+        
+    ELSIF shop_record.categories = 'tool' THEN
+      SELECT ARRAY_AGG(id) INTO eligible_items
+      FROM items 
+      WHERE category = 'tool' 
+        AND rarity IN ('common', 'uncommon')
+        AND is_tradeable = TRUE;
+        
+    ELSIF shop_record.categories = 'vehicle' THEN
+      SELECT ARRAY_AGG(id) INTO eligible_items
+      FROM items 
+      WHERE category = 'vehicle' 
+        AND rarity = 'common'
+        AND is_tradeable = TRUE;
+        
+    ELSIF shop_record.categories = 'cosmetic' THEN
+      SELECT ARRAY_AGG(id) INTO eligible_items
+      FROM items 
+      WHERE category = 'cosmetic' 
+        AND rarity IN ('common', 'uncommon')
+        AND is_tradeable = TRUE;
+        
+    ELSE -- general_store (consumable, tool)
+      SELECT ARRAY_AGG(id) INTO eligible_items
+      FROM items 
+      WHERE category IN ('consumable', 'tool')
+        AND rarity = 'common'
+        AND is_tradeable = TRUE;
+    END IF;
+    
+    rotated_count := 0;
+    
+    -- Add random items to shop (3-8 items per shop)
+    FOR i IN 1..(3 + floor(random() * 6)) LOOP
+      INSERT INTO shop_inventory (
+        shop_type,
+        item_id,
+        stock_quantity,
+        price_multiplier,
+        restock_at
+      ) VALUES (
+        shop_record.shop_type,
+        eligible_items[1 + floor(random() * array_length(eligible_items, 1))],
+        1 + floor(random() * 5), -- 1-5 quantity
+        1.2 + (random() * 0.8), -- 1.2-2.0x base price
+        NOW() + INTERVAL '24 hours'
+      )
+      ON CONFLICT (shop_type, item_id) 
+      DO UPDATE SET 
+        stock_quantity = EXCLUDED.stock_quantity,
+        price_multiplier = EXCLUDED.price_multiplier,
+        restock_at = EXCLUDED.restock_at;
+      
+      IF FOUND THEN
+        rotated_count := rotated_count + 1;
+      END IF;
+    END LOOP;
+    
+    -- Return shop rotation info
+    shop_type := shop_record.shop_type;
+    items_rotated := rotated_count;
+    message := 'Rotated ' || rotated_count || ' items in ' || shop_record.shop_type;
+    RETURN NEXT;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION rotate_shop_inventory IS 'Rotates available items in all shop types';
+
+-- =============================================================================
+-- 4. DYNAMIC PROPERTY PRICE ADJUSTMENT
+-- Adjusts property prices based on district activity
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION adjust_property_prices()
+RETURNS TABLE (
+  district_id VARCHAR(50),
+  properties_adjusted INT,
+  avg_price_change NUMERIC,
+  message TEXT
+) AS $$
+DECLARE
+  district_record RECORD;
+  activity_factor NUMERIC;
+  economy_factor NUMERIC;
+  police_factor NUMERIC;
+  price_adjustment NUMERIC;
+  adjusted_count INT;
+  total_change NUMERIC;
+BEGIN
+  FOR district_record IN 
+    SELECT 
+      d.id,
+      d.name,
+      d.economy_level,
+      d.police_presence,
+      COUNT(DISTINCT p.id) as property_count,
+      COUNT(DISTINCT b.id) as business_count,
+      COUNT(DISTINCT cl.id) as recent_crimes
+    FROM districts d
+    LEFT JOIN properties p ON p.district_id = d.id
+    LEFT JOIN businesses b ON b.district_id = d.id AND b.status = 'open'
+    LEFT JOIN crime_logs cl ON cl.district_id = d.id 
+      AND cl.attempted_at > NOW() - INTERVAL '24 hours'
+    WHERE d.is_active = TRUE
+    GROUP BY d.id, d.name, d.economy_level, d.police_presence
+  LOOP
+    -- Calculate adjustment factors (0.8 to 1.2 range)
+    activity_factor := 1.0 + 
+      (district_record.recent_crimes * 0.001) - 
+      (district_record.business_count * 0.0005);
+    
+    economy_factor := 1.0 + 
+      ((district_record.economy_level - 50) * 0.002);
+    
+    police_factor := 1.0 - 
+      (district_record.police_presence * 0.001);
+    
+    -- Combined adjustment (capped at ±30%)
+    price_adjustment := LEAST(GREATEST(
+      activity_factor * economy_factor * police_factor,
+      0.7
+    ), 1.3);
+    
+    adjusted_count := 0;
+    total_change := 0;
+    
+    -- Update properties in this district
+    WITH updated_properties AS (
+      UPDATE properties
+      SET 
+        current_value = current_value * price_adjustment,
+        last_value_adjustment = NOW()
+      WHERE district_id = district_record.id
+        AND owner_id IS NULL -- Only adjust unowned properties
+        AND last_value_adjustment < NOW() - INTERVAL '6 hours'
+      RETURNING current_value, base_value
+    )
+    SELECT 
+      COUNT(*),
+      AVG(price_adjustment - 1.0) * 100
+    INTO adjusted_count, total_change
+    FROM updated_properties;
+    
+    -- Update district base property price
+    UPDATE districts
+    SET base_property_price = base_property_price * price_adjustment
+    WHERE id = district_record.id;
+    
+    -- Log significant changes
+    IF ABS(total_change) > 5 THEN
+      INSERT INTO game_events (
+        event_type,
+        event_subtype,
+        district_id,
+        value_numeric,
+        metadata
+      ) VALUES (
+        'economy',
+        'property_adjustment',
+        district_record.id,
+        total_change,
+        jsonb_build_object(
+          'district', district_record.name,
+          'properties_adjusted', adjusted_count,
+          'adjustment_factor', price_adjustment
+        )
+      );
+    END IF;
+    
+    -- Return adjustment info
+    district_id := district_record.id;
+    properties_adjusted := adjusted_count;
+    avg_price_change := COALESCE(total_change, 0);
+    message := 'Adjusted ' || adjusted_count || ' properties in ' || 
+               district_record.name || ' by ' || 
+               ROUND(COALESCE(total_change, 0), 2) || '%';
+    RETURN NEXT;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION adjust_property_prices IS 'Dynamically adjusts property prices based on district activity';
+
+-- =============================================================================
+-- 5. SPECIAL EVENT GENERATOR
+-- Creates limited-time special events with unique rewards
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION generate_special_event()
+RETURNS TABLE (
+  event_name VARCHAR(100),
+  event_description TEXT,
+  event_type VARCHAR(50),
+  duration_hours INT,
+  rewards JSONB,
+  conditions JSONB,
+  message TEXT
+) AS $$
+DECLARE
+  event_roll INT;
+  event_data JSONB;
+  reward_data JSONB;
+  condition_data JSONB;
+  duration INT;
+BEGIN
+  event_roll := floor(random() * 100);
+  
+  -- Determine event type
+  IF event_roll < 25 THEN
+    -- Double XP Weekend
+    event_name := 'Double XP Weekend';
+    event_description := 'All activities grant double experience points!';
+    event_type := 'double_xp';
+    duration := 72; -- 3 days
+    reward_data := jsonb_build_object(
+      'xp_multiplier', 2.0,
+      'bonus_items', jsonb_build_array('energy_drink', 'energy_drink', 'energy_drink')
+    );
+    condition_data := jsonb_build_object(
+      'min_level', 1,
+      'participation_reward', true
+    );
+    message := 'Double XP Weekend has begun! All activities grant 2x XP for 3 days!';
+    
+  ELSIF event_roll < 50 THEN
+    -- Crime Wave
+    event_name := 'Crime Wave';
+    event_description := 'Increased crime payouts and reduced police response across the city.';
+    event_type := 'crime_wave';
+    duration := 48; -- 2 days
+    reward_data := jsonb_build_object(
+      'crime_payout_multiplier', 1.5,
+      'crime_success_bonus', 15,
+      'heat_reduction', 20,
+      'bonus_items', jsonb_build_array('burner_phone', 'fake_id')
+    );
+    condition_data := jsonb_build_object(
+      'min_level', 3,
+      'crime_participation', 5
+    );
+    message := 'Crime wave hits Toronto! Increased payouts and reduced heat for crimes!';
+    
+  ELSIF event_roll < 75 THEN
+    -- Business Boom
+    event_name := 'Business Boom';
+    event_description := 'All businesses generate 50% more income!';
+    event_type := 'business_boom';
+    duration := 24; -- 1 day
+    reward_data := jsonb_build_object(
+      'business_income_multiplier', 1.5,
+      'setup_cost_reduction', 25,
+      'bonus_items', jsonb_build_array('first_aid_kit', 'first_aid_kit')
+    );
+    condition_data := jsonb_build_object(
+      'min_level', 5,
+      'business_requirement', 1
+    );
+    message := 'Economic stimulus announced! All businesses generate 1.5x income today!';
+    
+  ELSE
+    -- Crew Challenge
+    event_name := 'Crew Challenge';
+    event_description := 'Crews compete for top rankings. Special rewards for participation and winning.';
+    event_type := 'crew_challenge';
+    duration := 96; -- 4 days
+    reward_data := jsonb_build_object(
+      'top_crew_rewards', jsonb_build_object(
+        '1', jsonb_build_object('cash', 50000, 'item', 'luxury_sedan'),
+        '2', jsonb_build_object('cash', 25000, 'item', 'sports_car'),
+        '3', jsonb_build_object('cash', 10000, 'item', 'suv')
+      ),
+      'participation_rewards', jsonb_build_object(
+        'cash', 1000,
+        'xp', 500
+      )
+    );
+    condition_data := jsonb_build_object(
+      'min_crew_size', 3,
+      'crew_requirement', true
+    );
+    message := 'Crew Challenge announced! Compete with other crews for exclusive rewards!';
+  END IF;
+  
+  -- Insert special event
+  INSERT INTO special_events (
+    name,
+    description,
+    event_type,
+    started_at,
+    expires_at,
+    rewards,
+    conditions,
+    is_active
+  ) VALUES (
+    event_name,
+    event_description,
+    event_type,
+    NOW(),
+    NOW() + (duration || ' hours')::INTERVAL,
+    reward_data,
+    condition_data,
+    TRUE
+  );
+  
+  -- Notify all active players
+  INSERT INTO player_messages (sender_id, recipient_id, subject, content)
+  SELECT 
+    '00000000-0000-0000-0000-000000000000', -- System sender
+    p.id,
+    'Special Event: ' || event_name,
+    message || ' Event lasts until ' || 
+    TO_CHAR(NOW() + (duration || ' hours')::INTERVAL, 'MM/DD HH24:MI') || '.'
+  FROM players p
+  WHERE p.is_active = TRUE;
+  
+  -- Return event details
+  RETURN QUERY SELECT 
+    event_name::VARCHAR,
+    event_description::TEXT,
+    event_type::VARCHAR,
+    duration::INT,
+    reward_data::JSONB,
+    condition_data::JSONB,
+    message::TEXT;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION generate_special_event IS 'Generates limited-time special events with unique rewards';
+
+-- =============================================================================
+-- 6. PLAYER NEW CONTENT NOTIFICATION
+-- Notifies players about new content they can access
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION notify_new_content(p_player_id UUID)
+RETURNS TABLE (
+  notifications_sent INT,
+  content_types TEXT[],
+  message TEXT
+) AS $$
+DECLARE
+  player_level INT;
+  notifications INT := 0;
+  content_list TEXT[] := '{}';
+  new_crimes INT;
+  new_jobs INT;
+  new_businesses INT;
+  new_items INT;
+BEGIN
+  -- Get player info
+  SELECT level INTO player_level FROM players WHERE id = p_player_id;
+  
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Player not found';
+  END IF;
+  
+  -- Check for newly accessible crimes
+  SELECT COUNT(*) INTO new_crimes
+  FROM crime_types ct
+  WHERE ct.required_level <= player_level
+    AND NOT EXISTS (
+      SELECT 1 FROM crime_logs cl
+      WHERE cl.player_id = p_player_id
+        AND cl.crime_type_id = ct.id
+    )
+    AND ct.required_level > player_level - 3; -- Only recent unlocks
+    
+  IF new_crimes > 0 THEN
+    INSERT INTO player_messages (sender_id, recipient_id, subject, content)
+    VALUES (
+      '00000000-0000-0000-0000-000000000000',
+      p_player_id,
+      'New Crimes Available',
+      'You can now attempt ' || new_crimes || ' new crimes! Check the crime menu.'
+    );
+    notifications := notifications + 1;
+    content_list := content_list || ARRAY['crimes'];
+  END IF;
+  
+  -- Check for newly accessible jobs
+  SELECT COUNT(*) INTO new_jobs
+  FROM job_types jt
+  WHERE jt.required_level <= player_level
+    AND NOT EXISTS (
+      SELECT 1 FROM job_logs jl
+      WHERE jl.player_id = p_player_id
+        AND jl.job_type_id = jt.id
+    )
+    AND jt.required_level > player_level - 2;
+    
+  IF new_jobs > 0 THEN
+    INSERT INTO player_messages (sender_id, recipient_id, subject, content)
+    VALUES (
+      '00000000-0000-0000-0000-000000000000',
+      p_player_id,
+      'New Jobs Available',
+      'You can now work ' || new_jobs || ' new jobs! Check the job board.'
+    );
+    notifications := notifications + 1;
+    content_list := content_list || ARRAY['jobs'];
+  END IF;
+  
+  -- Check for newly accessible businesses
+  SELECT COUNT(*) INTO new_businesses
+  FROM business_types bt
+  WHERE bt.required_level <= player_level
+    AND NOT EXISTS (
+      SELECT 1 FROM businesses b
+      WHERE b.owner_id = p_player_id
+        AND b.business_type_id = bt.id
+    );
+    
+  IF new_businesses > 0 THEN
+    INSERT INTO player_messages (sender_id, recipient_id, subject, content)
+    VALUES (
+      '00000000-0000-0000-0000-000000000000',
+      p_player_id,
+      'New Businesses Available',
+      'You can now open ' || new_businesses || ' new business types! Check properties.'
+    );
+    notifications := notifications + 1;
+    content_list := content_list || ARRAY['businesses'];
+  END IF;
+  
+  -- Check for newly accessible items
+  SELECT COUNT(*) INTO new_items
+  FROM items i
+  WHERE (i.requirements->>'level')::INT <= player_level
+    AND NOT EXISTS (
+      SELECT 1 FROM player_inventory pi
+      WHERE pi.player_id = p_player_id
+        AND pi.item_id = i.id
+    )
+    AND i.rarity IN ('common', 'uncommon');
+    
+  IF new_items > 0 THEN
+    INSERT INTO player_messages (sender_id, recipient_id, subject, content)
+    VALUES (
+      '00000000-0000-0000-0000-000000000000',
+      p_player_id,
+      'New Items Available',
+      'You can now purchase ' || new_items || ' new items! Check the shops.'
+    );
+    notifications := notifications + 1;
+    content_list := content_list || ARRAY['items'];
+  END IF;
+  
+  -- Return notification summary
+  notifications_sent := notifications;
+  content_types := content_list;
+  message := 'Sent ' || notifications || ' new content notifications';
+  
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION notify_new_content IS 'Notifies players about newly accessible content based on their level';
+
+-- =============================================================================
+-- 7. POPULATE WORLD FUNCTION
+-- One-time function to populate world with NPCs and starter content
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION populate_game_world()
+RETURNS TABLE (
+  step VARCHAR(100),
+  count INT,
+  message TEXT
+) AS $$
+DECLARE
+  temp_count INT;
+BEGIN
+  -- Step 1: Create NPC players
+  INSERT INTO players (id, username, display_name, level, rep_crime, rep_business, cash_balance, is_npc)
+  SELECT 
+    gen_random_uuid(),
+    'npc_' || i,
+    CASE i
+      WHEN 1 THEN 'Tony Two-Face'
+      WHEN 2 THEN 'Silent Mike'
+      WHEN 3 THEN 'Fast Eddie'
+      WHEN 4 THEN 'Lucky Lou'
+      WHEN 5 THEN 'Smiling Jack'
+      WHEN 6 THEN 'Dollar Bill'
+      WHEN 7 THEN 'Red Rita'
+      WHEN 8 THEN 'Ice Queen'
+      WHEN 9 THEN 'Whisper'
+      WHEN 10 THEN 'The Tailor'
+      ELSE 'NPC_' || i
+    END,
+    floor(random() * 20) + 10, -- Levels 10-30
+    floor(random() * 500) + 100,
+    floor(random() * 500) + 100,
+    floor(random() * 50000) + 10000,
+    TRUE
+  FROM generate_series(1, 50) i
+  ON CONFLICT DO NOTHING;
+  
+  GET DIAGNOSTICS temp_count = ROW_COUNT;
+  step := 'NPC Players Created';
+  count := temp_count;
+  message := 'Created ' || temp_count || ' NPC players';
+  RETURN NEXT;
+  
+  -- Step 2: Create starter crews (NPC crews)
+  WITH new_crews AS (
+    INSERT INTO crews (id, name, tag, description, leader_id, home_district_id, level, member_count, reputation)
+    SELECT 
+      gen_random_uuid(),
+      CASE i
+        WHEN 1 THEN 'Scarlet Syndicate'
+        WHEN 2 THEN 'Midnight Runners'
+        WHEN 3 THEN 'Cobbleton Crew'
+        WHEN 4 THEN 'Iron Fist'
+        WHEN 5 THEN 'Ghost Wolves'
+        WHEN 6 THEN 'Red Hand'
+        WHEN 7 THEN 'Silent Partners'
+        WHEN 8 THEN 'The Untouchables'
+        ELSE 'Crew ' || i
+      END,
+      CASE i
+        WHEN 1 THEN 'SCAR'
+        WHEN 2 THEN 'MDRN'
+        WHEN 3 THEN 'COBB'
+        WHEN 4 THEN 'IRON'
+        WHEN 5 THEN 'GHST'
+        WHEN 6 THEN 'REDH'
+        WHEN 7 THEN 'SILT'
+        WHEN 8 THEN 'UNTO'
+        ELSE 'CRW' || LPAD(i::TEXT, 2, '0')
+      END,
+      CASE i
+        WHEN 1 THEN 'Operating out of Scarborough, known for discretion.'
+        WHEN 2 THEN 'Night-time specialists with a reputation for speed.'
+        WHEN 3 THEN 'Old-school crew from Cobbleton, all business.'
+        WHEN 4 THEN 'Enforcers who get things done, no questions asked.'
+        WHEN 5 THEN 'Evasive and hard to track, perfect for smuggling.'
+        WHEN 6 THEN 'Violent but efficient, not to be crossed.'
+        WHEN 7 THEN 'Investors and money men, they pull strings.'
+        WHEN 8 THEN 'Untouchable by law, connections in high places.'
+        ELSE 'NPC crew ' || i
+      END,
+      p.id,
+      d.id,
+      floor(random() * 10) + 5,
+      floor(random() * 5) + 3,
+      floor(random() * 300) + 100
+    FROM generate_series(1, 8) i
+    CROSS JOIN (
+      SELECT id FROM players WHERE is_npc = TRUE ORDER BY RANDOM() LIMIT 1
+    ) p
+    CROSS JOIN (
+      SELECT id FROM districts WHERE is_active = TRUE ORDER BY RANDOM() LIMIT 1
+    ) d
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  )
+  SELECT COUNT(*) INTO temp_count FROM new_crews;
+  
+  step := 'NPC Crews Created';
+  count := temp_count;
+  message := 'Created ' || temp_count || ' NPC crews';
+  RETURN NEXT;
+  
+  -- Step 3: Add NPCs to crews
+  WITH crew_ids AS (
+    SELECT id FROM crews WHERE is_active = TRUE AND member_count < 10
+  ),
+  npc_ids AS (
+    SELECT id FROM players WHERE is_npc = TRUE AND NOT EXISTS (
+      SELECT 1 FROM crew_members WHERE player_id = players.id
+    )
+    ORDER BY RANDOM()
+    LIMIT 100
+  ),
+  crew_assignments AS (
+    INSERT INTO crew_members (crew_id, player_id, role)
+    SELECT 
+      c.id,
+      n.id,
+      CASE 
+        WHEN RANDOM() < 0.1 THEN 'officer'
+        ELSE 'member'
+      END
+    FROM crew_ids c
+    CROSS JOIN LATERAL (
+      SELECT id FROM npc_ids ORDER BY RANDOM() LIMIT 5
+    ) n
+    ON CONFLICT DO NOTHING
+    RETURNING crew_id
+  )
+  SELECT COUNT(DISTINCT crew_id) INTO temp_count FROM crew_assignments;
+  
+  step := 'NPCs Assigned to Crews';
+  count := temp_count;
+  message := 'Assigned NPCs to ' || temp_count || ' crews';
+  RETURN NEXT;
+  
+  -- Step 4: Populate marketplace with NPC listings
+  WITH random_items AS (
+    SELECT i.id, i.base_value
+    FROM items i
+    WHERE i.is_tradeable = TRUE
+    ORDER BY RANDOM()
+    LIMIT 100
+  ),
+  marketplace_insert AS (
+    INSERT INTO marketplace_listings (
+      seller_id,
+      item_id,
+      quantity,
+      asking_price,
+      listing_type,
+      expires_at
+    )
+    SELECT 
+      p.id,
+      ri.id,
+      1 + floor(random() * 3),
+      ri.base_value * (0.8 + random() * 0.4), -- 80-120% of base
+      'sell',
+      NOW() + INTERVAL '7 days'
+    FROM random_items ri
+    CROSS JOIN (
+      SELECT id FROM players WHERE is_npc = TRUE ORDER BY RANDOM() LIMIT 20
+    ) p
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  )
+  SELECT COUNT(*) INTO temp_count FROM marketplace_insert;
+  
+  step := 'Marketplace Listings Created';
+  count := temp_count;
+  message := 'Created ' || temp_count || ' NPC marketplace listings';
+  RETURN NEXT;
+  
+  -- Step 5: Create some pre-owned properties
+  WITH random_properties AS (
+    SELECT p.id, p.current_value
+    FROM properties p
+    WHERE p.owner_id IS NULL
+    ORDER BY RANDOM()
+    LIMIT 30
+  ),
+  property_purchases AS (
+    UPDATE properties p
+    SET 
+      owner_id = (
+        SELECT id FROM players 
+        WHERE is_npc = TRUE 
+        ORDER BY RANDOM() 
+        LIMIT 1
+      ),
+      purchased_at = NOW() - INTERVAL '7 days',
+      purchased_price = p.current_value * (0.9 + random() * 0.2)
+    FROM random_properties rp
+    WHERE p.id = rp.id
+    RETURNING p.id
+  )
+  SELECT COUNT(*) INTO temp_count FROM property_purchases;
+  
+  step := 'Properties Assigned to NPCs';
+  count := temp_count;
+  message := 'Assigned ' || temp_count || ' properties to NPC owners';
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION populate_game_world IS 'Populates the game world with NPCs, crews, and starter content';
+
+-- =============================================================================
+-- CREATE REQUIRED TABLES FOR NEW FUNCTIONS
+-- =============================================================================
+
+-- District Events Table
+CREATE TABLE IF NOT EXISTS district_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  district_id VARCHAR(50) NOT NULL REFERENCES districts(id),
+  event_type VARCHAR(50) NOT NULL,
+  description TEXT,
+  effects JSONB NOT NULL DEFAULT '{}',
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT district_events_expires_after_start CHECK (expires_at > started_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_district_events_active ON district_events(district_id, is_active, expires_at);
+CREATE INDEX IF NOT EXISTS idx_district_events_type ON district_events(event_type, is_active);
+
+-- Shop Inventory Table
+CREATE TABLE IF NOT EXISTS shop_inventory (
+  shop_type VARCHAR(50) NOT NULL,
+  item_id VARCHAR(50) NOT NULL REFERENCES items(id),
+  stock_quantity INT NOT NULL DEFAULT 1,
+  price_multiplier NUMERIC(5,2) NOT NULL DEFAULT 1.0,
+  restock_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  PRIMARY KEY (shop_type, item_id),
+  CONSTRAINT shop_inventory_positive_quantity CHECK (stock_quantity >= 0),
+  CONSTRAINT shop_inventory_positive_price CHECK (price_multiplier > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_shop_inventory_restock ON shop_inventory(restock_at);
+CREATE INDEX IF NOT EXISTS idx_shop_inventory_type ON shop_inventory(shop_type, stock_quantity DESC);
+
+-- Special Events Table
+CREATE TABLE IF NOT EXISTS special_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  event_type VARCHAR(50) NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  rewards JSONB NOT NULL DEFAULT '{}',
+  conditions JSONB NOT NULL DEFAULT '{}',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT special_events_expires_after_start CHECK (expires_at > started_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_special_events_active ON special_events(is_active, expires_at);
+CREATE INDEX IF NOT EXISTS idx_special_events_type ON special_events(event_type, is_active);
+
+-- Add is_npc column to players table if not exists
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'players' AND column_name = 'is_npc'
+  ) THEN
+    ALTER TABLE players ADD COLUMN is_npc BOOLEAN NOT NULL DEFAULT FALSE;
+    CREATE INDEX IF NOT EXISTS idx_players_npc ON players(is_npc);
+  END IF;
+END
+$$;
+
+-- =============================================================================
+-- SCHEDULED JOB CONFIGURATION
+-- =============================================================================
+
+-- Create a table to track scheduled jobs if not exists
+CREATE TABLE IF NOT EXISTS scheduled_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_name VARCHAR(100) NOT NULL UNIQUE,
+  last_run TIMESTAMPTZ,
+  next_run TIMESTAMPTZ,
+  interval_hours INT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  description TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Insert scheduled job configurations
+INSERT INTO scheduled_jobs (job_name, interval_hours, description, is_active) VALUES
+  ('assign_daily_missions', 24, 'Assigns daily missions to all players at midnight', TRUE),
+  ('trigger_district_event', 6, 'Triggers random district events every 6 hours', TRUE),
+  ('rotate_shop_inventory', 12, 'Rotates shop inventory every 12 hours', TRUE),
+  ('adjust_property_prices', 24, 'Adjusts property prices based on activity', TRUE),
+  ('cleanup_old_data', 168, 'Cleans up old logs and expired data weekly', TRUE)
+ON CONFLICT (job_name) DO UPDATE SET
+  interval_hours = EXCLUDED.interval_hours,
+  description = EXCLUDED.description,
+  is_active = EXCLUDED.is_active;
+
+-- =============================================================================
+-- GRANT PERMISSIONS
+-- =============================================================================
+
+GRANT EXECUTE ON FUNCTION assign_daily_missions TO authenticated;
+GRANT EXECUTE ON FUNCTION trigger_district_event TO authenticated;
+GRANT EXECUTE ON FUNCTION rotate_shop_inventory TO authenticated;
+GRANT EXECUTE ON FUNCTION adjust_property_prices TO authenticated;
+GRANT EXECUTE ON FUNCTION generate_special_event TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_new_content TO authenticated;
+GRANT EXECUTE ON FUNCTION populate_game_world TO authenticated;
+
+-- Grant table permissions
+GRANT SELECT, INSERT, UPDATE ON district_events TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON shop_inventory TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON special_events TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON scheduled_jobs TO authenticated;
