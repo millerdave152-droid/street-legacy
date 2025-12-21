@@ -36,7 +36,122 @@ export class MiniGameResult extends Phaser.Scene {
   }
 
   create() {
-    console.log('[MiniGameResult] create() called')
+    console.log('[MiniGameResult] ========== CREATE STARTED ==========')
+    console.log('[MiniGameResult] Result:', this.result)
+    console.log('[MiniGameResult] GameData:', this.gameData)
+
+    // CRITICAL: Set up emergency exit IMMEDIATELY before anything else can fail
+    // This ensures users can always exit even if something crashes
+    this.setupEmergencyExit()
+
+    // VISIBLE DEBUG - Add text at top of screen to confirm scene is running
+    try {
+      this.cameras.main.setBackgroundColor(0x000000)
+      this.debugText = this.add.text(10, 10, 'MiniGameResult loaded - processing...', {
+        fontSize: '12px',
+        color: '#00ff00',
+        backgroundColor: '#000000'
+      }).setDepth(9999)
+    } catch (e) {
+      console.error('[MiniGameResult] Failed to add debug text:', e)
+    }
+
+    try {
+      this._createInternal()
+      // Update debug text on success
+      if (this.debugText) {
+        this.debugText.setText('Result ready - tap to continue')
+      }
+    } catch (e) {
+      console.error('[MiniGameResult] CRITICAL ERROR IN CREATE:', e)
+      // Update debug text to show error
+      try {
+        if (this.debugText) {
+          this.debugText.setText('ERROR: ' + e.message + ' - tap to exit')
+          this.debugText.setColor('#ff0000')
+        }
+      } catch (e2) {}
+    }
+  }
+
+  setupEmergencyExit() {
+    console.log('[MiniGameResult] Setting up emergency exit')
+
+    // Capture game reference immediately
+    const game = this.game
+
+    // Helper function to safely exit
+    const safeExit = () => {
+      console.log('[MiniGameResult] Safe exit triggered')
+      if (this.isFinishing) return
+      this.isFinishing = true
+
+      try {
+        // Try normal scene transition first
+        if (game && game.scene) {
+          game.scene.stop('MiniGameResult')
+          game.scene.start('CrimeScene')
+          console.log('[MiniGameResult] Exited via game.scene')
+          return
+        }
+      } catch (e) {
+        console.warn('[MiniGameResult] game.scene exit failed:', e)
+      }
+
+      try {
+        // Try this.scene as fallback
+        this.scene.start('CrimeScene')
+        console.log('[MiniGameResult] Exited via this.scene')
+        return
+      } catch (e) {
+        console.warn('[MiniGameResult] this.scene exit failed:', e)
+      }
+
+      // Last resort - reload the page
+      console.log('[MiniGameResult] All exits failed, reloading page')
+      window.location.reload()
+    }
+
+    // Multiple exit mechanisms for reliability
+
+    // 1. Phaser input (if available)
+    try {
+      this.input.once('pointerdown', safeExit)
+    } catch (e) {
+      console.warn('[MiniGameResult] Failed to set up Phaser input:', e)
+    }
+
+    // 2. DOM click handler as backup
+    const clickHandler = () => {
+      console.log('[MiniGameResult] DOM click emergency exit')
+      document.removeEventListener('click', clickHandler)
+      document.removeEventListener('touchstart', clickHandler)
+      safeExit()
+    }
+    document.addEventListener('click', clickHandler, { once: true })
+    document.addEventListener('touchstart', clickHandler, { once: true })
+
+    // 3. Keyboard handler
+    const keyHandler = (e) => {
+      if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
+        console.log('[MiniGameResult] Keyboard emergency exit')
+        document.removeEventListener('keydown', keyHandler)
+        safeExit()
+      }
+    }
+    document.addEventListener('keydown', keyHandler)
+
+    // 4. Auto-exit after 8 seconds as final failsafe
+    this.emergencyTimeout = setTimeout(() => {
+      console.log('[MiniGameResult] Auto emergency exit after 8s')
+      safeExit()
+    }, 8000)
+  }
+
+  _createInternal() {
+    // CRITICAL: Mark scene as interactive immediately
+    this.input.enabled = true
+    console.log('[MiniGameResult] Input enabled')
 
     // CRITICAL: Reset camera state first to prevent colored screen bug
     try {
@@ -47,12 +162,14 @@ export class MiniGameResult extends Phaser.Scene {
       this.tweens.timeScale = 1
       // Stop any lingering camera tweens
       this.tweens.killTweensOf(this.cameras.main)
+      console.log('[MiniGameResult] Camera reset done')
     } catch (e) {
       console.warn('[MiniGameResult] Camera reset warning:', e)
     }
 
     // CRITICAL: Bring this scene to top
     this.scene.bringToTop()
+    console.log('[MiniGameResult] Scene brought to top')
 
     // Stop all other mini-game scenes that might still be running
     try {
@@ -136,17 +253,21 @@ export class MiniGameResult extends Phaser.Scene {
     // Input handlers
     this.setupInputHandlers(height)
 
-    // Auto-exit failsafe
-    this.time.delayedCall(15000, () => {
+    // Auto-exit failsafe using native setTimeout (more reliable than Phaser's delayedCall)
+    // 10 seconds should be enough time to see the results, then auto-exit
+    this.autoExitTimeout = setTimeout(() => {
+      console.log('[MiniGameResult] Auto-exit timeout triggered after 10s')
       if (!this.isFinishing) {
         this.finish()
       }
-    })
+    }, 10000)
 
     // Fade in
     this.cameras.main.fadeIn(300)
+    console.log('[MiniGameResult] Fade in started')
 
     // Play appropriate sound
+    console.log('[MiniGameResult] Playing sound...')
     if (this.result.success) {
       if (this.result.perfectRun || this.performanceTier.name === 'PERFECT') {
         audioManager.playPerfect()
@@ -156,6 +277,8 @@ export class MiniGameResult extends Phaser.Scene {
     } else {
       audioManager.playMiniGameLose()
     }
+
+    console.log('[MiniGameResult] ========== CREATE COMPLETED ==========')
   }
 
   getPerformanceTier(scoreRatio, success) {
@@ -987,40 +1110,101 @@ export class MiniGameResult extends Phaser.Scene {
   }
 
   setupInputHandlers(height) {
-    // Keyboard
-    if (this.input.keyboard) {
-      this.input.keyboard.on('keydown-SPACE', () => this.finish())
-      this.input.keyboard.on('keydown-ENTER', () => this.finish())
-      this.input.keyboard.on('keydown-ESC', () => this.finish())
+    console.log('[MiniGameResult] Setting up input handlers')
+
+    // CRITICAL: Ensure input is enabled
+    this.input.enabled = true
+
+    // Keyboard - with fallback
+    try {
+      if (this.input.keyboard) {
+        this.input.keyboard.on('keydown-SPACE', () => {
+          console.log('[MiniGameResult] SPACE pressed')
+          this.finish()
+        })
+        this.input.keyboard.on('keydown-ENTER', () => {
+          console.log('[MiniGameResult] ENTER pressed')
+          this.finish()
+        })
+        this.input.keyboard.on('keydown-ESC', () => {
+          console.log('[MiniGameResult] ESC pressed')
+          this.finish()
+        })
+        console.log('[MiniGameResult] Keyboard handlers registered')
+      } else {
+        console.warn('[MiniGameResult] No keyboard available')
+      }
+    } catch (e) {
+      console.error('[MiniGameResult] Keyboard setup error:', e)
     }
 
-    // Tap anywhere (except bottom button area)
-    this.input.on('pointerdown', (pointer) => {
-      if (pointer.y < height - 90) {
-        this.time.delayedCall(100, () => {
-          if (!this.isFinishing) {
-            this.finish()
-          }
-        })
+    // Tap anywhere - DIRECT handling, no delay needed
+    try {
+      this.input.on('pointerdown', (pointer) => {
+        console.log('[MiniGameResult] Pointer down at y:', pointer.y, 'height:', height)
+        // Accept tap anywhere on screen
+        if (!this.isFinishing) {
+          this.finish()
+        }
+      })
+      console.log('[MiniGameResult] Pointer handler registered')
+    } catch (e) {
+      console.error('[MiniGameResult] Pointer setup error:', e)
+    }
+
+    // Also add a DOM-level click handler as ultimate fallback
+    try {
+      this.domClickHandler = () => {
+        console.log('[MiniGameResult] DOM click detected')
+        if (!this.isFinishing) {
+          this.finish()
+        }
       }
-    })
+      document.addEventListener('click', this.domClickHandler, { once: true })
+      console.log('[MiniGameResult] DOM click handler registered')
+    } catch (e) {
+      console.error('[MiniGameResult] DOM handler error:', e)
+    }
   }
 
   finish() {
     if (this.isFinishing) return
     this.isFinishing = true
 
-    console.log('[MiniGameResult] finish() called')
+    console.log('[MiniGameResult] finish() called - TRANSITIONING OUT')
+
+    // Clear the auto-exit timeout
+    if (this.autoExitTimeout) {
+      clearTimeout(this.autoExitTimeout)
+      this.autoExitTimeout = null
+    }
+
+    // Clear DOM click handler
+    if (this.domClickHandler) {
+      try {
+        document.removeEventListener('click', this.domClickHandler)
+      } catch (e) {}
+      this.domClickHandler = null
+    }
 
     // Cleanup particles
-    this.particles.forEach(p => {
-      if (p && p.destroy) p.destroy()
-    })
-    this.particles = []
+    try {
+      this.particles.forEach(p => {
+        if (p && p.destroy) p.destroy()
+      })
+      this.particles = []
+    } catch (e) {
+      console.warn('[MiniGameResult] Particle cleanup error:', e)
+    }
 
     // Stop all tweens to prevent lingering animations
     try {
       this.tweens.killAll()
+    } catch (e) {}
+
+    // Stop all time events
+    try {
+      this.time.removeAllEvents()
     } catch (e) {}
 
     // CRITICAL: Reset camera state before transition
@@ -1035,13 +1219,13 @@ export class MiniGameResult extends Phaser.Scene {
       console.warn('[MiniGameResult] Camera reset warning:', e)
     }
 
-    // Stop all time events
+    // Disable input immediately
     try {
-      this.time.removeAllEvents()
+      this.input.removeAllListeners()
+      if (this.input.keyboard) {
+        this.input.keyboard.removeAllListeners()
+      }
     } catch (e) {}
-
-    // Disable input
-    this.input.removeAllListeners()
 
     // Callback
     if (this.gameData?.onComplete) {
@@ -1059,45 +1243,89 @@ export class MiniGameResult extends Phaser.Scene {
 
     const returnScene = this.gameData?.returnScene || 'CrimeScene'
     const game = this.game
+    const result = this.result
 
-    try {
-      const miniGameScenes = ['MiniGameResult', 'SteadyHandGame', 'SnakeGame', 'LockPickGame', 'QTEGame',
-                              'HackingGame', 'SafeCrackGame', 'GetawayGame', 'TimingGame', 'MemoryGame',
-                              'FroggerGame', 'ChaseGame', 'WireGame', 'SniperGame', 'RhythmGame',
-                              'NegotiationGame', 'SurveillanceGame']
-      miniGameScenes.forEach(key => {
-        try {
-          if (game.scene.isActive(key) || game.scene.isPaused(key)) {
-            game.scene.stop(key)
-          }
-        } catch (e) {}
-      })
+    // Stop all mini-game scenes first
+    const miniGameScenes = ['SteadyHandGame', 'SnakeGame', 'LockPickGame', 'QTEGame',
+                            'HackingGame', 'SafeCrackGame', 'GetawayGame', 'TimingGame', 'MemoryGame',
+                            'FroggerGame', 'ChaseGame', 'WireGame', 'SniperGame', 'RhythmGame',
+                            'NegotiationGame', 'SurveillanceGame']
+    miniGameScenes.forEach(key => {
+      try {
+        if (game.scene.isActive(key)) {
+          game.scene.stop(key)
+        }
+      } catch (e) {}
+    })
 
-      // Use small delay to ensure camera reset is applied
-      this.time.delayedCall(50, () => {
+    console.log('[MiniGameResult] Preparing transition to:', returnScene)
+
+    // Use native setTimeout to ensure reliable transition
+    setTimeout(() => {
+      try {
+        console.log('[MiniGameResult] Executing transition now')
+
+        // Stop this scene and start the return scene
+        game.scene.stop('MiniGameResult')
+        game.scene.start(returnScene, { miniGameResult: result })
+
+        console.log('[MiniGameResult] Transition successful')
+      } catch (e) {
+        console.error('[MiniGameResult] Transition error:', e)
+
+        // Fallback 1: Try GameScene
         try {
-          game.scene.start(returnScene, { miniGameResult: this.result })
-        } catch (e) {
-          console.error('[MiniGameResult] Transition error:', e)
+          console.log('[MiniGameResult] Trying fallback to GameScene')
+          game.scene.stop('MiniGameResult')
+          game.scene.start('GameScene')
+        } catch (e2) {
+          console.error('[MiniGameResult] Fallback to GameScene failed:', e2)
+
+          // Fallback 2: Force restart the game
           try {
-            game.scene.start('GameScene')
-          } catch (e2) {
-            console.error('[MiniGameResult] Fallback failed:', e2)
+            console.log('[MiniGameResult] Forcing game restart')
+            window.location.reload()
+          } catch (e3) {
+            console.error('[MiniGameResult] All fallbacks failed')
           }
         }
-      })
-    } catch (e) {
-      console.error('[MiniGameResult] Transition error:', e)
-      try {
-        game.scene.start('GameScene')
-      } catch (e2) {
-        console.error('[MiniGameResult] Fallback failed:', e2)
       }
+    }, 100) // Increased delay for safety
+  }
+
+  update(time, delta) {
+    // Log every 60 frames (~1 second) to confirm scene is running
+    if (!this.frameCount) this.frameCount = 0
+    this.frameCount++
+    if (this.frameCount % 60 === 0) {
+      console.log('[MiniGameResult] update() running, frame:', this.frameCount, 'isFinishing:', this.isFinishing)
     }
   }
 
   shutdown() {
     console.log('[MiniGameResult] shutdown called')
+
+    // Clear auto-exit timeout
+    if (this.autoExitTimeout) {
+      clearTimeout(this.autoExitTimeout)
+      this.autoExitTimeout = null
+    }
+
+    // Clear emergency timeout
+    if (this.emergencyTimeout) {
+      clearTimeout(this.emergencyTimeout)
+      this.emergencyTimeout = null
+    }
+
+    // Clear DOM click handler
+    if (this.domClickHandler) {
+      try {
+        document.removeEventListener('click', this.domClickHandler)
+      } catch (e) {}
+      this.domClickHandler = null
+    }
+
+    // Clean up particles
     this.particles.forEach(p => {
       if (p && p.destroy) p.destroy()
     })

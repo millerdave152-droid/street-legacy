@@ -20,6 +20,18 @@ const OUTPUT_COLORS = {
   [OUTPUT_TYPES.WARNING]: 0xffaa00,    // Amber for warnings
   [OUTPUT_TYPES.HANDLER]: 0x8b5cf6,    // Purple for handler messages
   [OUTPUT_TYPES.SARAH]: 0x06b6d4,      // Cyan for S.A.R.A.H. AI assistant
+
+  // S.A.R.A.H. enhanced colors
+  [OUTPUT_TYPES.SARAH_HEADER]: 0x22d3ee,     // Bright cyan for headers
+  [OUTPUT_TYPES.SARAH_STAT]: 0x06b6d4,       // Standard cyan for stats
+  [OUTPUT_TYPES.SARAH_STAT_GOOD]: 0x22c55e,  // Green for good stats
+  [OUTPUT_TYPES.SARAH_STAT_WARN]: 0xfbbf24,  // Amber for warning stats
+  [OUTPUT_TYPES.SARAH_STAT_CRIT]: 0xef4444,  // Red for critical stats
+  [OUTPUT_TYPES.SARAH_RECOMMEND]: 0x34d399,  // Mint green for recommendations
+  [OUTPUT_TYPES.SARAH_WARNING]: 0xf59e0b,    // Orange for warnings
+  [OUTPUT_TYPES.SARAH_CRITICAL]: 0xf87171,   // Bright red for critical
+  [OUTPUT_TYPES.SARAH_INTEL]: 0xa78bfa,      // Light purple for intel
+  [OUTPUT_TYPES.SARAH_THREAT]: 0xfb7185,     // Pink-red for threats
 }
 
 export class TerminalWidget {

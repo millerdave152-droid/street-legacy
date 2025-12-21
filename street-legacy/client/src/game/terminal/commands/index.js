@@ -7,6 +7,11 @@ import { registerInfoCommands } from './InfoCommands'
 import { registerSystemCommands } from './SystemCommands'
 import { registerNavigationCommands } from './NavigationCommands'
 import { registerSarahCommands } from './SarahCommands'
+import { registerNPCCommands } from './NPCCommands'
+import { terminalNPCManager } from '../../managers/TerminalNPCManager'
+
+// Adventure commands register on import
+import './AdventureCommands'
 
 // Track if commands have been registered
 let commandsRegistered = false
@@ -30,11 +35,11 @@ export function registerAllCommands() {
   // S.A.R.A.H. AI assistant commands
   registerSarahCommands()
 
-  // Action commands (to be added)
-  // registerActionCommands()
+  // NPC terminal opportunity system
+  registerNPCCommands()
 
-  // Social commands (to be added)
-  // registerSocialCommands()
+  // Initialize NPC manager for random messages
+  terminalNPCManager.initialize()
 
   commandsRegistered = true
   console.log('[Commands] All commands registered')

@@ -5,6 +5,10 @@
 
 import { commandRegistry } from '../terminal/CommandRegistry'
 import { parseCommand } from '../terminal/CommandParser'
+import { inputRouter } from '../terminal/InputRouter'
+import { conversationalSarah } from '../sarah/ConversationalSarah'
+import { adventureEngine } from '../adventure/AdventureEngine'
+import { opportunityManager } from '../opportunity/OpportunityManager'
 
 // Output line types for styling
 export const OUTPUT_TYPES = {
@@ -16,6 +20,18 @@ export const OUTPUT_TYPES = {
   WARNING: 'warning',      // Warning messages (amber)
   HANDLER: 'handler',      // Handler messages ([FIXER] etc)
   SARAH: 'sarah',          // S.A.R.A.H. AI assistant (cyan)
+
+  // S.A.R.A.H. enhanced output types
+  SARAH_HEADER: 'sarah_header',       // Panel header (bright cyan)
+  SARAH_STAT: 'sarah_stat',           // Stat line with bar
+  SARAH_STAT_GOOD: 'sarah_stat_good', // Good stat (green)
+  SARAH_STAT_WARN: 'sarah_stat_warn', // Warning stat (amber)
+  SARAH_STAT_CRIT: 'sarah_stat_crit', // Critical stat (red)
+  SARAH_RECOMMEND: 'sarah_recommend', // Recommendation arrow
+  SARAH_WARNING: 'sarah_warning',     // S.A.R.A.H. warning (amber)
+  SARAH_CRITICAL: 'sarah_critical',   // Critical alert (red pulsing)
+  SARAH_INTEL: 'sarah_intel',         // AI intel (purple)
+  SARAH_THREAT: 'sarah_threat',       // Threat warning (red)
 }
 
 class TerminalManager {
@@ -273,6 +289,7 @@ class TerminalManager {
 
   /**
    * Execute the current input buffer
+   * Uses InputRouter for smart command vs conversation detection
    */
   async executeCurrentInput() {
     const input = this.inputBuffer.trim()
@@ -294,19 +311,104 @@ class TerminalManager {
     this.historyIndex = -1
     this.notifyListeners('input', { input: '', cursor: 0 })
 
-    // Show command in output
+    // Show input in output
     this.addOutput(`> ${input}`, OUTPUT_TYPES.COMMAND)
 
-    // Parse and execute
+    // Route input through smart classification
     try {
-      const parsed = parseCommand(input)
+      const routing = await inputRouter.route(input, this)
+
+      switch (routing.type) {
+        case 'adventure':
+          // Active adventure - route to adventure engine
+          const advResult = adventureEngine.processInput(routing.data)
+          if (advResult.output) {
+            advResult.output.forEach(line => {
+              this.addOutput(line, OUTPUT_TYPES.RESPONSE)
+            })
+          }
+          if (advResult.error) {
+            this.addOutput(advResult.error, OUTPUT_TYPES.ERROR)
+          }
+          break
+
+        case 'opportunity_response':
+          // Responding to an opportunity
+          const oppData = routing.data
+          const opp = opportunityManager.getOpportunityByIndex(oppData.index)
+          if (!opp) {
+            this.addOutput(`No opportunity #${oppData.index} found. Type 'opportunities' to see available.`, OUTPUT_TYPES.ERROR)
+          } else if (!oppData.response) {
+            // Just viewing the opportunity
+            this.addOutput(`[${opp.npcName}] "${opp.message}"`, OUTPUT_TYPES.HANDLER)
+            this.addOutput(`Type: respond ${oppData.index} yes/no`, OUTPUT_TYPES.SYSTEM)
+          } else {
+            // Actually responding
+            const oppResult = opportunityManager.respond(opp.id, oppData.response)
+            if (oppResult.success) {
+              this.addOutput(oppResult.message || 'Response recorded.', OUTPUT_TYPES.SUCCESS)
+              // Check if adventure should start
+              if (oppResult.adventureStart && oppResult.adventureId) {
+                const advStart = adventureEngine.startAdventure(oppResult.adventureId)
+                if (advStart.output) {
+                  advStart.output.forEach(line => {
+                    this.addOutput(line, OUTPUT_TYPES.RESPONSE)
+                  })
+                }
+              }
+            } else {
+              this.addOutput(oppResult.error || 'Failed to respond.', OUTPUT_TYPES.ERROR)
+            }
+          }
+          break
+
+        case 'command':
+          // Direct command execution (existing path)
+          await this.executeDirectCommand(input)
+          break
+
+        case 'nl_command':
+          // Natural language mapped to command
+          if (routing.echo) {
+            this.addOutput(`[S.A.R.A.H.] ${routing.echo}`, OUTPUT_TYPES.SARAH)
+          }
+          await this.executeDirectCommand(routing.data)
+          break
+
+        case 'conversation':
+        case 'ambiguous':
+          // Conversational query - S.A.R.A.H. handles it
+          const response = await conversationalSarah.processInput(input, this)
+          this.handleSarahResponse(response)
+          break
+
+        case 'empty':
+          // Empty input - ignore
+          break
+
+        default:
+          // Fallback to conversation
+          const fallbackResponse = await conversationalSarah.processInput(input, this)
+          this.handleSarahResponse(fallbackResponse)
+      }
+    } catch (error) {
+      console.error('[TerminalManager] Input processing error:', error)
+      this.addOutput(`Error: ${error.message}`, OUTPUT_TYPES.ERROR)
+    }
+  }
+
+  /**
+   * Execute a direct command (internal helper)
+   */
+  async executeDirectCommand(commandString) {
+    try {
+      const parsed = parseCommand(commandString)
       const result = await commandRegistry.execute(parsed, this)
 
       if (result) {
         if (result.error) {
           this.addOutput(result.message || result.error, OUTPUT_TYPES.ERROR)
         } else if (result.output) {
-          // Handle array of output lines
           const lines = Array.isArray(result.output) ? result.output : [result.output]
           lines.forEach(line => {
             if (typeof line === 'object') {
@@ -320,6 +422,22 @@ class TerminalManager {
     } catch (error) {
       console.error('[TerminalManager] Command error:', error)
       this.addOutput(`Error: ${error.message}`, OUTPUT_TYPES.ERROR)
+    }
+  }
+
+  /**
+   * Handle S.A.R.A.H. response output
+   */
+  handleSarahResponse(response) {
+    if (response && response.output) {
+      const lines = Array.isArray(response.output) ? response.output : [response.output]
+      lines.forEach(line => {
+        if (typeof line === 'object') {
+          this.addOutput(line.text, line.type || OUTPUT_TYPES.SARAH)
+        } else {
+          this.addOutput(line, OUTPUT_TYPES.SARAH)
+        }
+      })
     }
   }
 

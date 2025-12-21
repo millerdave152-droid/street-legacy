@@ -14,3 +14,8 @@ export { intentClassifier, INTENT_TYPES } from './IntentClassifier'
 export { responseGenerator } from './ResponseGenerator'
 export { sarahKnowledgeBase, MECHANICS, STRATEGIC_ADVICE, FAQ } from './SarahKnowledgeBase'
 export { proactiveMonitor } from './ProactiveMonitor'
+
+// Enhanced components (Phase 2)
+export { conversationMemory } from './ConversationMemory'
+export { aiIntelAnalyzer } from './AIIntelAnalyzer'
+export { visualFormatter, SYMBOLS, BOX } from './VisualFormatter'

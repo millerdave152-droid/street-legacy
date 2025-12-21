@@ -7,24 +7,37 @@
  * - Response generation
  * - Knowledge base queries
  * - Proactive monitoring
+ * - Conversation memory (persistent)
+ * - AI player intel
+ * - Visual formatting
  */
 
 import { gameManager } from '../GameManager'
 import { terminalManager, OUTPUT_TYPES } from '../managers/TerminalManager'
 import { sarahPersonality, SARAH_IDENTITY } from './SarahPersonality'
 import { intentClassifier, INTENT_TYPES } from './IntentClassifier'
+import { semanticIntentClassifier } from './SemanticIntentClassifier'
 import { responseGenerator } from './ResponseGenerator'
 import { sarahKnowledgeBase } from './SarahKnowledgeBase'
 import { proactiveMonitor } from './ProactiveMonitor'
+import { conversationMemory } from './ConversationMemory'
+import { aiIntelAnalyzer } from './AIIntelAnalyzer'
+import { visualFormatter } from './VisualFormatter'
 
 class SarahManagerClass {
   constructor() {
     this.isInitialized = false
-    this.conversationContext = [] // Recent Q&A for context
+    this.conversationContext = [] // Recent Q&A for context (backup)
     this.maxContextLength = 5 // Remember last 5 exchanges
 
     // Debug mode
     this.debugMode = false
+
+    // Current exchange ID for decision tracking
+    this.currentExchangeId = null
+
+    // Semantic understanding mode (enabled by default)
+    this.useSemanticMode = true
   }
 
   /**
@@ -36,11 +49,23 @@ class SarahManagerClass {
       return
     }
 
+    // Initialize semantic understanding engine
+    if (this.useSemanticMode) {
+      semanticIntentClassifier.initialize()
+      console.log('[SarahManager] Semantic understanding engine initialized')
+    }
+
+    // Initialize conversation memory (loads from localStorage)
+    conversationMemory.initialize()
+
     // Initialize proactive monitor with callback
     proactiveMonitor.initialize(this.handleProactiveNotification.bind(this))
 
     this.isInitialized = true
-    console.log('[SarahManager] S.A.R.A.H. initialized - Street Autonomous Response & Assistance Hub online')
+
+    // Log memory stats
+    const memStats = conversationMemory.getStats()
+    console.log(`[SarahManager] S.A.R.A.H. initialized - ${memStats.totalExchanges} exchanges in memory`)
   }
 
   /**
@@ -65,27 +90,46 @@ class SarahManagerClass {
     const normalizedQuery = query.trim()
 
     try {
-      // Classify intent
-      const classification = intentClassifier.classifyIntent(normalizedQuery)
+      // Check for similar past queries
+      const pastQuery = conversationMemory.findSimilarPastQuery(normalizedQuery)
+
+      // Classify intent using semantic or pattern matching
+      let classification
+      if (this.useSemanticMode) {
+        // Use semantic classification with slang/typo handling
+        classification = semanticIntentClassifier.classifyIntent(normalizedQuery)
+      } else {
+        // Fallback to pattern-only classification
+        classification = intentClassifier.classifyIntent(normalizedQuery)
+      }
 
       if (this.debugMode) {
         console.log('[SarahManager] Classification:', classification)
+        console.log('[SarahManager] Source:', classification.source || 'pattern')
+        if (classification.preprocessed?.wasModified) {
+          console.log('[SarahManager] Input normalized:', classification.preprocessed.normalized)
+        }
+        if (pastQuery) {
+          console.log('[SarahManager] Similar past query found:', pastQuery.type)
+        }
       }
 
-      // Build context
+      // Build context with memory info
       const context = this.buildContext(normalizedQuery, classification)
+
+      // Add player preferences from memory
+      context.preferences = conversationMemory.getPlayerPreferences()
+      context.relatedHistory = conversationMemory.getRelatedHistory(normalizedQuery, 2)
 
       // Generate response based on intent
       let response
 
-      if (classification.intent === INTENT_TYPES.UNKNOWN || classification.confidence < 0.3) {
-        // Try FAQ as fallback
-        const faqAnswer = sarahKnowledgeBase.findFAQ(normalizedQuery)
-        if (faqAnswer) {
-          response = faqAnswer
-        } else {
-          response = sarahPersonality.getUnknownResponse()
-        }
+      // If exact same question was asked before, acknowledge it
+      if (pastQuery && pastQuery.type === 'exact') {
+        response = `${pastQuery.message}\n\n${pastQuery.exchange.response}`
+      } else if (classification.intent === INTENT_TYPES.UNKNOWN || classification.confidence < 0.15) {
+        // Smart fallback: Try to understand what user might be asking
+        response = this.generateSmartFallback(normalizedQuery, classification)
       } else {
         response = responseGenerator.generateResponse(
           classification.intent,
@@ -94,7 +138,21 @@ class SarahManagerClass {
         )
       }
 
-      // Store in conversation context
+      // Store in persistent conversation memory
+      const player = gameManager.player || {}
+      this.currentExchangeId = conversationMemory.addExchange(
+        normalizedQuery,
+        response,
+        classification.intent,
+        {
+          level: player.level || 1,
+          energy: player.energy || 0,
+          heat: player.heat || 0,
+          cash: player.cash || 0,
+        }
+      )
+
+      // Also store in session context (backup)
       this.addToContext(normalizedQuery, response, classification.intent)
 
       return this.formatOutput(response)
@@ -103,6 +161,101 @@ class SarahManagerClass {
       console.error('[SarahManager] Error processing query:', error)
       return this.formatOutput(sarahPersonality.getErrorResponse())
     }
+  }
+
+  /**
+   * Track decision outcome (call after player acts on advice)
+   */
+  trackDecision(actionTaken, outcome = null) {
+    if (this.currentExchangeId) {
+      conversationMemory.trackDecision(this.currentExchangeId, actionTaken, outcome)
+    }
+  }
+
+  /**
+   * Generate a smart fallback response when query isn't clear
+   * Suggests similar topics, asks clarifying questions, or guides user
+   */
+  generateSmartFallback(query, classification) {
+    // First check FAQ
+    const faqAnswer = sarahKnowledgeBase.findFAQ(query)
+    if (faqAnswer) {
+      return faqAnswer
+    }
+
+    // Use semantic suggestions if in semantic mode
+    if (this.useSemanticMode) {
+      const semanticSuggestions = semanticIntentClassifier.getSuggestions(query)
+      const concepts = semanticIntentClassifier.getConcepts(query)
+
+      if (semanticSuggestions.length > 0 && semanticSuggestions[0].confidence > 0.2) {
+        const bestMatch = semanticSuggestions[0]
+        const suggestions = semanticSuggestions.slice(0, 3)
+          .map(s => `• ${s.friendlyName} - ${s.suggestion}`)
+          .join('\n')
+
+        return `I think you might be asking about ${bestMatch.friendlyName}.\n\n` +
+               `Here's what I can help with:\n${suggestions}\n\n` +
+               `Or type "help" to see everything I can do.`
+      }
+
+      // If we detected concepts but no strong intent
+      if (concepts.length > 0) {
+        const conceptList = concepts.slice(0, 3).join(', ')
+        return `I picked up on "${conceptList}" but I'm not 100% sure what you need.\n\n` +
+               `Try being more specific, like:\n` +
+               `• "How do I make money?"\n` +
+               `• "What crime should I do?"\n` +
+               `• "Check my stats"\n\n` +
+               `Just talk naturally - I understand street talk and typos!`
+      }
+    }
+
+    // Fallback to pattern-based suggestions
+    const topMatches = intentClassifier.getTopMatches(query, 3)
+
+    if (topMatches.length > 0) {
+      const clarifyingQuestion = intentClassifier.getClarifyingQuestion(query, topMatches)
+
+      if (topMatches[0].score >= 1.5) {
+        const bestMatch = topMatches[0]
+        const suggestions = topMatches.map(m => `• "${m.friendlyName}"`).join('\n')
+
+        return `I'm not 100% sure what you need, but I think you might be asking about ${bestMatch.friendlyName}.\n\n` +
+               `Try asking me about:\n${suggestions}\n\n` +
+               `Or type "help" to see everything I can do.`
+      }
+
+      if (clarifyingQuestion) {
+        return `${clarifyingQuestion}\n\nTip: Type "help" to see all the things I can help with.`
+      }
+    }
+
+    // Check if query contains any recognizable words at all
+    const recognizedWords = intentClassifier.getRecognizedWords(query)
+
+    if (recognizedWords.length > 0) {
+      return `I heard "${recognizedWords.join(', ')}" but I'm not sure what you need.\n\n` +
+             `Try being more specific, like:\n` +
+             `• "How do I make money?"\n` +
+             `• "What crime should I do?"\n` +
+             `• "Check my stats"\n` +
+             `• "Tell me about [player name]"\n\n` +
+             `Type "help" for the full menu.`
+    }
+
+    // Complete unknown - give a friendly guide
+    const quickTips = [
+      '• "money" or "cash" - money tips',
+      '• "crime" or "score" - crime recommendations',
+      '• "heat" or "cops" - how to cool down',
+      '• "stats" or "me" - check your status',
+      '• "help" - see everything I can do',
+    ]
+
+    return `Not sure I follow, runner. Here are some things you can ask me:\n\n` +
+           `${quickTips.join('\n')}\n\n` +
+           `Just type naturally - I understand street talk and typos too!`
   }
 
   /**
@@ -163,9 +316,14 @@ class SarahManagerClass {
   }
 
   /**
-   * Get a greeting response
+   * Get a greeting response (personalized based on history)
    */
   getGreeting() {
+    // Try to get personalized greeting from memory
+    const personalizedGreeting = conversationMemory.getPersonalizedGreeting()
+    if (personalizedGreeting) {
+      return this.formatOutput(personalizedGreeting)
+    }
     return this.formatOutput(sarahPersonality.getGreeting())
   }
 
@@ -226,15 +384,104 @@ class SarahManagerClass {
   }
 
   /**
+   * Enable/disable semantic understanding mode
+   */
+  setSemanticMode(enabled) {
+    this.useSemanticMode = enabled
+    if (enabled && !semanticIntentClassifier.initialized) {
+      semanticIntentClassifier.initialize()
+    }
+    console.log(`[SarahManager] Semantic mode: ${enabled ? 'ON' : 'OFF'}`)
+  }
+
+  /**
+   * Get semantic classification stats
+   */
+  getSemanticStats() {
+    if (!this.useSemanticMode) {
+      return { enabled: false }
+    }
+    return {
+      enabled: true,
+      ...semanticIntentClassifier.getStats()
+    }
+  }
+
+  /**
+   * Analyze an input in detail (for debugging)
+   */
+  analyzeInput(input) {
+    if (!this.useSemanticMode) {
+      return { semanticMode: false, classification: intentClassifier.classifyIntent(input) }
+    }
+    return semanticIntentClassifier.analyze(input)
+  }
+
+  /**
    * Get status information
    */
   getStatus() {
+    const memStats = conversationMemory.getStats()
+    const threats = aiIntelAnalyzer.getActiveThreats()
+
     return {
       initialized: this.isInitialized,
       contextLength: this.conversationContext.length,
       proactiveStatus: proactiveMonitor.getStatus(),
       personality: sarahPersonality.getPersonalityInfo(),
+      memory: {
+        totalExchanges: memStats.totalExchanges,
+        totalDecisions: memStats.totalDecisions,
+        preferences: memStats.preferences,
+      },
+      threats: threats.length,
+      semantic: this.useSemanticMode ? semanticIntentClassifier.getStats() : { enabled: false },
     }
+  }
+
+  /**
+   * Get AI player intel
+   */
+  getAIIntel(playerName) {
+    return aiIntelAnalyzer.getAIPlayerIntel(playerName)
+  }
+
+  /**
+   * Get active threats
+   */
+  getThreats() {
+    return aiIntelAnalyzer.getActiveThreats()
+  }
+
+  /**
+   * Analyze a trade offer
+   */
+  analyzeOffer(offer) {
+    return aiIntelAnalyzer.analyzeTradeOffer(offer)
+  }
+
+  /**
+   * Get alliance suggestions
+   */
+  getAllianceSuggestions() {
+    const player = gameManager.player || {}
+    return aiIntelAnalyzer.suggestAlliances(player)
+  }
+
+  /**
+   * Get formatted analysis panel (visual output)
+   */
+  getFormattedAnalysis(recommendation, confidence = 85) {
+    const player = gameManager.player || {}
+    return visualFormatter.createAnalysisPanel(player, recommendation, confidence)
+  }
+
+  /**
+   * Clear conversation memory
+   */
+  clearMemory() {
+    conversationMemory.clearMemory()
+    this.conversationContext = []
   }
 
   /**

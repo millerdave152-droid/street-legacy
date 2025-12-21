@@ -491,6 +491,15 @@ export class BaseMiniGame extends Phaser.Scene {
   endGame(success) {
     console.log('[BaseMiniGame] endGame() called, success:', success)
 
+    // VISIBLE DEBUG
+    try {
+      this.add.text(10, 50, 'DEBUG: endGame called - transitioning...', {
+        fontSize: '14px',
+        color: '#ffff00',
+        backgroundColor: '#000000'
+      }).setDepth(9999)
+    } catch (e) {}
+
     if (this.isGameOver) {
       console.log('[BaseMiniGame] Already game over, ignoring')
       return
@@ -608,33 +617,63 @@ export class BaseMiniGame extends Phaser.Scene {
       console.warn('[BaseMiniGame] Camera reset warning:', e)
     }
 
-    // Stop all timers and events
-    try {
-      this.time.removeAllEvents()
-    } catch (e) {}
-
     // Transition to result scene
     console.log('[BaseMiniGame] Starting transition to MiniGameResult')
+    console.log('[BaseMiniGame] Result object:', JSON.stringify(result))
+    console.log('[BaseMiniGame] GameData object:', JSON.stringify(gameData))
 
-    try {
-      // Small delay to ensure camera reset is applied
-      this.time.delayedCall(50, () => {
+    // Use native setTimeout instead of Phaser's delayedCall to avoid race condition
+    // (removeAllEvents() would kill the delayedCall before it executes)
+    // CRITICAL: Capture scene reference BEFORE the timeout - 'this' may be stale after delay
+    const sceneRef = this.scene
+    const timeRef = this.time
+
+    setTimeout(() => {
+      console.log('[BaseMiniGame] setTimeout fired, attempting transition...')
+      try {
+        // Now safe to remove all time events
         try {
-          // Use scene.start() which automatically handles stopping the current scene
-          this.scene.start('MiniGameResult', {
+          if (timeRef && timeRef.removeAllEvents) {
+            timeRef.removeAllEvents()
+          }
+        } catch (e) {
+          console.warn('[BaseMiniGame] removeAllEvents error:', e)
+        }
+
+        console.log('[BaseMiniGame] Calling scene.start(MiniGameResult)...')
+        console.log('[BaseMiniGame] game valid:', !!game)
+        console.log('[BaseMiniGame] game.scene valid:', !!(game && game.scene))
+
+        // CRITICAL FIX: Use game.scene instead of this.scene - 'this' may be stale
+        if (game && game.scene) {
+          // Stop current mini-game scene first
+          try {
+            game.scene.stop(currentSceneKey)
+          } catch (e) {
+            console.warn('[BaseMiniGame] Failed to stop current scene:', e)
+          }
+
+          // Start the result scene
+          game.scene.start('MiniGameResult', {
             result,
             gameData
           })
-          console.log('[BaseMiniGame] Started MiniGameResult scene')
-        } catch (e) {
-          console.error('[BaseMiniGame] Transition error:', e)
-          this.fallbackTransition(game, result, gameData)
+          console.log('[BaseMiniGame] game.scene.start() completed successfully')
+        } else if (sceneRef && sceneRef.start) {
+          // Fallback to captured scene reference
+          sceneRef.start('MiniGameResult', {
+            result,
+            gameData
+          })
+          console.log('[BaseMiniGame] sceneRef.start() completed successfully')
+        } else {
+          throw new Error('No valid scene reference available')
         }
-      })
-    } catch (e) {
-      console.error('[BaseMiniGame] Transition error:', e)
-      this.fallbackTransition(game, result, gameData)
-    }
+      } catch (e) {
+        console.error('[BaseMiniGame] Transition error:', e)
+        this.fallbackTransition(game, result, gameData)
+      }
+    }, 50)
   }
 
   /**

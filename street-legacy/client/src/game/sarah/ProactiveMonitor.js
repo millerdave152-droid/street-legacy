@@ -3,10 +3,17 @@
  *
  * Monitors game state and triggers helpful notifications
  * at appropriate times without being spammy.
+ *
+ * Enhanced with:
+ * - AI threat detection
+ * - Trade offer analysis
+ * - Optimal timing detection
+ * - Predictive warnings
  */
 
 import { gameManager } from '../GameManager'
 import { responseGenerator } from './ResponseGenerator'
+import { aiIntelAnalyzer } from './AIIntelAnalyzer'
 
 // Trigger thresholds and cooldowns
 const TRIGGERS = {
@@ -40,6 +47,31 @@ const TRIGGERS = {
   AI_MESSAGE: {
     cooldown: 5 * 60 * 1000, // 5 minutes
   },
+
+  // NEW TRIGGERS
+  AI_THREAT_DETECTED: {
+    cooldown: 10 * 60 * 1000, // 10 minutes
+  },
+  SCAM_DETECTED: {
+    cooldown: 2 * 60 * 1000, // 2 minutes - urgent
+  },
+  GOOD_DEAL_AVAILABLE: {
+    cooldown: 15 * 60 * 1000, // 15 minutes
+  },
+  OPTIMAL_CONDITIONS: {
+    cooldown: 10 * 60 * 1000, // 10 minutes
+  },
+  PROPERTY_AFFORDABLE: {
+    cooldown: 30 * 60 * 1000, // 30 minutes
+  },
+  ENERGY_RECOVERED: {
+    threshold: 80, // Energy above this after being low
+    cooldown: 5 * 60 * 1000, // 5 minutes
+  },
+  HEAT_COOLED: {
+    threshold: 30, // Heat below this after being high
+    cooldown: 5 * 60 * 1000, // 5 minutes
+  },
 }
 
 class ProactiveMonitor {
@@ -63,6 +95,7 @@ class ProactiveMonitor {
       gameManager.on('playerUpdated', this.onPlayerUpdated.bind(this))
       gameManager.on('levelUp', this.onLevelUp.bind(this))
       gameManager.on('aiMessage', this.onAIMessage.bind(this))
+      gameManager.on('tradeOffer', this.onTradeOffer.bind(this))
     }
 
     // Also set up periodic check as fallback
@@ -122,6 +155,13 @@ class ProactiveMonitor {
     if (message) {
       this.sendNotification('aiMessage', message)
     }
+  }
+
+  /**
+   * Handle incoming trade offers
+   */
+  onTradeOffer(data) {
+    this.analyzeIncomingOffer(data)
   }
 
   /**
@@ -185,8 +225,121 @@ class ProactiveMonitor {
       }
     }
 
+    // NEW CHECKS
+
+    // Energy recovered check (was low, now high)
+    if (this.previousPlayerState && this.previousPlayerState.energy < 30 &&
+        playerData.energy >= TRIGGERS.ENERGY_RECOVERED.threshold) {
+      if (this.shouldNotify('energyRecovered')) {
+        this.sendNotification('energyRecovered',
+          `Energy's back to ${playerData.energy}. Ready to make some moves.`
+        )
+      }
+    }
+
+    // Heat cooled check (was high, now low)
+    if (this.previousPlayerState && this.previousPlayerState.heat >= 50 &&
+        playerData.heat <= TRIGGERS.HEAT_COOLED.threshold) {
+      if (this.shouldNotify('heatCooled')) {
+        this.sendNotification('heatCooled',
+          `Heat's down to ${playerData.heat}%. You're clear to operate again.`
+        )
+      }
+    }
+
+    // Optimal conditions check (high energy + low heat)
+    if (playerData.energy >= 80 && playerData.heat <= 30 && playerData.health >= 70) {
+      if (this.shouldNotify('optimalConditions')) {
+        this.sendNotification('optimalConditions',
+          `Perfect conditions - ${playerData.energy} energy, ${playerData.heat}% heat. Time to make your move.`
+        )
+      }
+    }
+
+    // Property affordable check
+    this.checkPropertyAffordable(playerData)
+
+    // AI threat check
+    this.checkAIThreats()
+
     // Store state for comparison
     this.previousPlayerState = { ...playerData }
+  }
+
+  /**
+   * Check if player can afford a new property tier
+   */
+  checkPropertyAffordable(playerData) {
+    const totalCash = (playerData.cash || 0) + (playerData.bank || 0)
+
+    const propertyTiers = [
+      { name: 'Small Apartment', cost: 5000 },
+      { name: 'Garage', cost: 15000 },
+      { name: 'Warehouse', cost: 50000 },
+      { name: 'Nightclub', cost: 100000 },
+      { name: 'Penthouse', cost: 250000 },
+    ]
+
+    // Find newly affordable property (compare with previous state)
+    if (this.previousPlayerState) {
+      const prevCash = (this.previousPlayerState.cash || 0) + (this.previousPlayerState.bank || 0)
+
+      for (const prop of propertyTiers) {
+        if (totalCash >= prop.cost && prevCash < prop.cost) {
+          if (this.shouldNotify('propertyAffordable')) {
+            this.sendNotification('propertyAffordable',
+              `You can now afford a ${prop.name} ($${prop.cost.toLocaleString()}). Passive income opportunity.`
+            )
+          }
+          break
+        }
+      }
+    }
+  }
+
+  /**
+   * Check for active AI threats
+   */
+  checkAIThreats() {
+    try {
+      const threats = aiIntelAnalyzer.getActiveThreats()
+
+      if (threats.length > 0) {
+        const highThreats = threats.filter(t => t.threat.level === 'HIGH')
+
+        if (highThreats.length > 0 && this.shouldNotify('aiThreatDetected')) {
+          const threat = highThreats[0]
+          this.sendNotification('aiThreatDetected',
+            `Watch your back - ${threat.name} (Lvl ${threat.level}) is showing hostile intent. ${threat.threat.warning}`
+          )
+        }
+      }
+    } catch (e) {
+      // AI systems may not be initialized yet
+    }
+  }
+
+  /**
+   * Analyze incoming trade offer
+   */
+  analyzeIncomingOffer(offer) {
+    if (!offer) return
+
+    try {
+      const analysis = aiIntelAnalyzer.analyzeTradeOffer(offer)
+
+      if (!analysis.safe && this.shouldNotify('scamDetected')) {
+        this.sendNotification('scamDetected',
+          `Warning: ${offer.sender || 'Someone'}'s offer looks shady. ${analysis.warnings[0] || 'Trust your gut.'}`
+        )
+      } else if (analysis.safe && analysis.warnings.length === 0 && this.shouldNotify('goodDealAvailable')) {
+        this.sendNotification('goodDealAvailable',
+          `Legit deal from ${offer.sender || 'a contact'}. Looks clean, might be worth your time.`
+        )
+      }
+    } catch (e) {
+      // AI systems may not be initialized
+    }
   }
 
   /**
