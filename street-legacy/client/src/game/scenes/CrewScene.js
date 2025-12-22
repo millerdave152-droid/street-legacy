@@ -4,7 +4,7 @@ import { formatMoney } from '../../utils/formatters'
 import { COLORS as OLD_COLORS } from '../../utils/constants'
 import { CREW_MEMBERS, getPlayerData, savePlayerData } from '../data/GameData.js'
 import { audioManager } from '../managers/AudioManager'
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 /**
  * CrewScene - Full NPC crew management system with long-term effects
@@ -376,11 +376,11 @@ export class CrewScene extends Phaser.Scene {
       fontFamily: 'Arial'
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {
-      closeBtn.setColor('#06b6d4')
+      closeBtn.setColor('#ef4444')
       closeBtn.setScale(1.2)
     })
     closeBtn.on('pointerout', () => {

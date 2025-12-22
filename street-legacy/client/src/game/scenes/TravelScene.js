@@ -3,7 +3,7 @@ import { gameManager } from '../GameManager'
 import { formatMoney } from '../../utils/formatters'
 import { DISTRICTS, getPlayerData, savePlayerData, getDistrictHeat, getDistrictEffects } from '../data/GameData.js'
 import { audioManager } from '../managers/AudioManager'
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 /**
  * TravelScene - Dedicated Travel Tab
@@ -278,11 +278,11 @@ export class TravelScene extends Phaser.Scene {
       fontFamily: 'Arial'
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {
-      closeBtn.setColor('#3b82f6')
+      closeBtn.setColor('#ef4444')
       closeBtn.setScale(1.2)
     })
     closeBtn.on('pointerout', () => {

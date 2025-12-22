@@ -356,14 +356,18 @@ export class MiniGameResult extends Phaser.Scene {
 
     // Scanline effect
     for (let y = 0; y < height; y += 4) {
-      const line = this.add.rectangle(width / 2, y, width, 1, 0x000000, 0.1).setDepth(3)
+      this.add.rectangle(width / 2, y, width, 1, 0x000000, 0.1).setDepth(3)
     }
 
-    // Vignette effect
-    const vignette = this.add.graphics().setDepth(4)
-    const vignetteGradient = vignette.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width * 0.7)
-    vignette.fillStyle(0x000000, 0)
-    vignette.fillRect(0, 0, width, height)
+    // Vignette effect using corner rectangles with alpha gradient simulation
+    // Top edge
+    this.add.rectangle(width / 2, 0, width, 60, 0x000000, 0.4).setOrigin(0.5, 0).setDepth(4)
+    // Bottom edge
+    this.add.rectangle(width / 2, height, width, 60, 0x000000, 0.4).setOrigin(0.5, 1).setDepth(4)
+    // Left edge
+    this.add.rectangle(0, height / 2, 40, height, 0x000000, 0.3).setOrigin(0, 0.5).setDepth(4)
+    // Right edge
+    this.add.rectangle(width, height / 2, 40, height, 0x000000, 0.3).setOrigin(1, 0.5).setDepth(4)
   }
 
   createCelebrationParticles(centerX, height) {
@@ -1047,23 +1051,30 @@ export class MiniGameResult extends Phaser.Scene {
       repeat: -1
     })
 
-    // Button background
-    const btn = this.add.rectangle(centerX, btnY, 210, 48, COLORS.bg.panel)
+    // Check if we can replay this activity
+    const canPlayAgain = this.gameData?.crimeId || this.gameData?.jobId
+
+    // Button layout - if we can play again, show two buttons side by side
+    const btnWidth = canPlayAgain ? 140 : 210
+    const continueX = canPlayAgain ? centerX + 75 : centerX
+    const playAgainX = centerX - 75
+
+    // Continue/Collect button
+    const btn = this.add.rectangle(continueX, btnY, btnWidth, 48, COLORS.bg.panel)
       .setStrokeStyle(3, btnColor, 0.9)
       .setDepth(81)
       .setInteractive({ useHandCursor: true })
 
-    // Button text
-    const btnLabel = this.result.success ? 'COLLECT REWARDS' : 'CONTINUE'
+    const btnLabel = this.result.success ? 'COLLECT' : 'CONTINUE'
     const btnIcon = this.result.success ? '💰' : SYMBOLS.forward
-    const btnText = this.add.text(centerX, btnY, `${btnIcon} ${btnLabel}`, {
+    const btnText = this.add.text(continueX, btnY, `${btnIcon} ${btnLabel}`, {
       fontFamily: '"JetBrains Mono", monospace',
-      fontSize: '14px',
+      fontSize: '13px',
       color: toHexString(btnColor),
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(82)
 
-    // Hover effects
+    // Hover effects for continue button
     btn.on('pointerover', () => {
       btn.setFillStyle(btnColor, 0.2)
       btn.setStrokeStyle(4, btnColor, 1)
@@ -1093,6 +1104,53 @@ export class MiniGameResult extends Phaser.Scene {
       } catch (e) {}
       this.finish()
     })
+
+    // Play Again button (if applicable)
+    if (canPlayAgain) {
+      const playAgainColor = 0x8b5cf6 // Purple
+
+      const playAgainBtn = this.add.rectangle(playAgainX, btnY, btnWidth, 48, COLORS.bg.panel)
+        .setStrokeStyle(3, playAgainColor, 0.9)
+        .setDepth(81)
+        .setInteractive({ useHandCursor: true })
+
+      const playAgainText = this.add.text(playAgainX, btnY, '🔄 PLAY AGAIN', {
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: '13px',
+        color: toHexString(playAgainColor),
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(82)
+
+      playAgainBtn.on('pointerover', () => {
+        playAgainBtn.setFillStyle(playAgainColor, 0.2)
+        playAgainBtn.setStrokeStyle(4, playAgainColor, 1)
+        this.tweens.add({
+          targets: [playAgainBtn, playAgainText],
+          scaleX: 1.05,
+          scaleY: 1.05,
+          duration: 100
+        })
+        audioManager.playHover()
+      })
+
+      playAgainBtn.on('pointerout', () => {
+        playAgainBtn.setFillStyle(COLORS.bg.panel)
+        playAgainBtn.setStrokeStyle(3, playAgainColor, 0.9)
+        this.tweens.add({
+          targets: [playAgainBtn, playAgainText],
+          scaleX: 1,
+          scaleY: 1,
+          duration: 100
+        })
+      })
+
+      playAgainBtn.on('pointerdown', () => {
+        try {
+          audioManager.playClick()
+        } catch (e) {}
+        this.playAgain()
+      })
+    }
 
     // Tap to continue hint
     const hint = this.add.text(centerX, height - 25, 'Tap anywhere or press SPACE to continue', {
@@ -1165,6 +1223,97 @@ export class MiniGameResult extends Phaser.Scene {
     } catch (e) {
       console.error('[MiniGameResult] DOM handler error:', e)
     }
+  }
+
+  /**
+   * Replay the same crime/job
+   */
+  playAgain() {
+    if (this.isFinishing) return
+    this.isFinishing = true
+
+    console.log('[MiniGameResult] playAgain() called')
+
+    // Determine what to replay
+    const crimeId = this.gameData?.crimeId
+    const jobId = this.gameData?.jobId
+    const targetScene = crimeId ? 'CrimeScene' : (jobId ? 'JobScene' : null)
+
+    if (!targetScene) {
+      console.warn('[MiniGameResult] No crime/job ID found, using normal finish')
+      this.isFinishing = false
+      return this.finish()
+    }
+
+    // Cleanup
+    this.cleanupForTransition()
+
+    // Transition to scene with auto-start flag
+    const replayData = {
+      autoStart: true,
+      crimeId: crimeId,
+      jobId: jobId
+    }
+
+    console.log('[MiniGameResult] Transitioning to', targetScene, 'with', replayData)
+
+    try {
+      this.scene.stop()
+      this.scene.start(targetScene, replayData)
+    } catch (e) {
+      console.error('[MiniGameResult] playAgain transition error:', e)
+      // Fallback
+      this.scene.stop()
+      this.scene.start('GameScene')
+    }
+  }
+
+  /**
+   * Common cleanup for transitions
+   */
+  cleanupForTransition() {
+    // Clear the auto-exit timeout
+    if (this.autoExitTimeout) {
+      clearTimeout(this.autoExitTimeout)
+      this.autoExitTimeout = null
+    }
+
+    // Clear DOM click handler
+    if (this.domClickHandler) {
+      try {
+        document.removeEventListener('click', this.domClickHandler)
+      } catch (e) {}
+      this.domClickHandler = null
+    }
+
+    // Cleanup particles
+    try {
+      this.particles.forEach(p => {
+        if (p && p.destroy) p.destroy()
+      })
+      this.particles = []
+    } catch (e) {}
+
+    // Stop tweens and time events
+    try { this.tweens.killAll() } catch (e) {}
+    try { this.time.removeAllEvents() } catch (e) {}
+
+    // Reset camera
+    try {
+      this.cameras.main.setZoom(1)
+      this.cameras.main.setAlpha(1)
+      this.cameras.main.resetFX()
+      this.cameras.main.setScroll(0, 0)
+      this.tweens.timeScale = 1
+    } catch (e) {}
+
+    // Disable input
+    try {
+      this.input.removeAllListeners()
+      if (this.input.keyboard) {
+        this.input.keyboard.removeAllListeners()
+      }
+    } catch (e) {}
   }
 
   finish() {
@@ -1242,6 +1391,7 @@ export class MiniGameResult extends Phaser.Scene {
     } catch (e) {}
 
     const returnScene = this.gameData?.returnScene || 'CrimeScene'
+    const returnData = this.gameData?.returnData || {}
     const game = this.game
     const result = this.result
 
@@ -1267,7 +1417,7 @@ export class MiniGameResult extends Phaser.Scene {
 
         // Stop this scene and start the return scene
         game.scene.stop('MiniGameResult')
-        game.scene.start(returnScene, { miniGameResult: result })
+        game.scene.start(returnScene, { miniGameResult: result, ...returnData })
 
         console.log('[MiniGameResult] Transition successful')
       } catch (e) {

@@ -127,12 +127,22 @@ export const HEISTS = [
 
 // Trading goods for local mode
 export const TRADING_GOODS = [
+  // Starter goods (Level 1-5)
   { id: 'weed', name: 'Cannabis', description: 'Low risk, low reward', buy_price: 100, sell_price: 150, risk: 'Low', min_level: 1 },
-  { id: 'pills', name: 'Pills', description: 'Party supplies', buy_price: 200, sell_price: 350, risk: 'Medium', min_level: 3 },
-  { id: 'coke', name: 'Cocaine', description: 'High risk, high reward', buy_price: 500, sell_price: 900, risk: 'High', min_level: 7 },
-  { id: 'guns', name: 'Firearms', description: 'Very dangerous to carry', buy_price: 1000, sell_price: 1800, risk: 'Very High', min_level: 10 },
   { id: 'stolen', name: 'Stolen Goods', description: 'Hot merchandise', buy_price: 150, sell_price: 250, risk: 'Low', min_level: 1 },
+  { id: 'pills', name: 'Pills', description: 'Party supplies', buy_price: 200, sell_price: 350, risk: 'Medium', min_level: 3 },
   { id: 'electronics', name: 'Hot Electronics', description: 'Boosted tech', buy_price: 300, sell_price: 500, risk: 'Medium', min_level: 5 },
+
+  // Mid-tier goods (Level 6-10)
+  { id: 'coke', name: 'Cocaine', description: 'High risk, high reward', buy_price: 500, sell_price: 900, risk: 'High', min_level: 7 },
+  { id: 'fake_ids', name: 'Fake IDs', description: 'Identity documents', buy_price: 400, sell_price: 700, risk: 'Medium', min_level: 8 },
+  { id: 'guns', name: 'Firearms', description: 'Very dangerous to carry', buy_price: 1000, sell_price: 1800, risk: 'Very High', min_level: 10 },
+  { id: 'crypto', name: 'Crypto Wallets', description: 'Anonymous digital assets', buy_price: 2000, sell_price: 3500, risk: 'Low', min_level: 10 },
+
+  // High-tier goods (Level 11-15)
+  { id: 'counterfeit', name: 'Counterfeit Cash', description: 'Fake bills, real risk', buy_price: 800, sell_price: 1400, risk: 'High', min_level: 12 },
+  { id: 'art_forgery', name: 'Art Forgeries', description: 'High-value fakes', buy_price: 3000, sell_price: 5500, risk: 'Medium', min_level: 14 },
+  { id: 'exotic_cars', name: 'Exotic Cars', description: 'Luxury vehicles', buy_price: 5000, sell_price: 9000, risk: 'Very High', min_level: 15 },
 ]
 
 // NPC Crew members for local mode

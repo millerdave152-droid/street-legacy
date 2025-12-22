@@ -777,14 +777,89 @@ class NotificationManagerClass {
   }
 
   /**
-   * Show level up notification with explosion effect
+   * Show level up notification with explosion effect and banner
    * @param {number} newLevel
    */
   showLevelUp(newLevel) {
     if (!this.scene || !this.scene.sys.isActive()) return
 
+    const { width, height } = this.scene.cameras.main
+
     // Trigger the big level up explosion effect
     ParticleHelper.levelUpExplosion(this.scene)
+
+    // Create celebration banner
+    const bannerY = height / 2 - 50
+
+    // Background flash
+    const flash = this.scene.add.rectangle(width / 2, height / 2, width, height, 0x8b5cf6, 0.3)
+      .setDepth(998)
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 500,
+      onComplete: () => flash.destroy()
+    })
+
+    // Main banner background
+    const banner = this.scene.add.rectangle(width / 2, bannerY, 300, 100, 0x1a1a2e, 0.95)
+      .setStrokeStyle(3, 0x8b5cf6, 1)
+      .setDepth(999)
+      .setScale(0)
+
+    // "LEVEL UP!" text
+    const levelUpText = this.scene.add.text(width / 2, bannerY - 15, 'LEVEL UP!', {
+      fontSize: '32px',
+      color: '#c4b5fd',
+      fontStyle: 'bold',
+      stroke: '#4c1d95',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(1000).setScale(0)
+
+    // New level text
+    const newLevelText = this.scene.add.text(width / 2, bannerY + 25, `Level ${newLevel}`, {
+      fontSize: '24px',
+      color: '#a855f7',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(1000).setScale(0)
+
+    // Animate banner in
+    this.scene.tweens.add({
+      targets: [banner, levelUpText, newLevelText],
+      scale: 1,
+      duration: 400,
+      ease: 'Back.easeOut'
+    })
+
+    // Add glow pulse to text
+    this.scene.tweens.add({
+      targets: levelUpText,
+      alpha: { from: 1, to: 0.7 },
+      duration: 300,
+      yoyo: true,
+      repeat: 3
+    })
+
+    // Play level up sound
+    try {
+      audioManager.playLevelUp()
+    } catch (e) { /* ignore */ }
+
+    // Animate banner out after delay
+    this.scene.time.delayedCall(2500, () => {
+      this.scene.tweens.add({
+        targets: [banner, levelUpText, newLevelText],
+        scale: 0,
+        alpha: 0,
+        duration: 300,
+        ease: 'Back.easeIn',
+        onComplete: () => {
+          banner.destroy()
+          levelUpText.destroy()
+          newLevelText.destroy()
+        }
+      })
+    })
   }
 
   /**

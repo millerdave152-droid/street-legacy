@@ -26,14 +26,24 @@ export class PlayerStatsBar {
     this.cooldownFill = null
     this.cooldownText = null
     this.regenText = null
+    // XP bar elements
+    this.xpBar = null
+    this.xpFill = null
+    this.xpText = null
+    this.levelText = null
 
     this.updateTimer = null
     this.lastCooldownEnd = 0
   }
 
+  // Calculate XP needed for a level (same formula as UIScene)
+  xpForLevel(level) {
+    return Math.floor(100 * Math.pow(1.5, level - 1))
+  }
+
   create() {
     const { width } = this.scene.cameras.main
-    const barHeight = 55
+    const barHeight = 75 // Increased to fit XP bar
     const player = gameManager.player || {}
 
     // Container for all stats
@@ -218,6 +228,58 @@ export class PlayerStatsBar {
     ).setOrigin(0.5)
     this.container.add(this.cooldownText)
 
+    // === XP BAR (bottom row) ===
+    const xpY = this.y + 58
+    const xpBarWidth = this.width - 80
+    const xpX = this.x + 15
+
+    // Level indicator
+    const level = player.level || 1
+    this.levelText = this.scene.add.text(xpX, xpY, `Lv.${level}`, {
+      fontSize: '10px',
+      color: '#a855f7',
+      fontStyle: 'bold'
+    }).setOrigin(0, 0.5)
+    this.container.add(this.levelText)
+
+    // XP bar background
+    const xpBarStartX = xpX + 35
+    this.xpBar = this.scene.add.rectangle(
+      xpBarStartX + xpBarWidth / 2,
+      xpY,
+      xpBarWidth,
+      8,
+      0x2a1a4a,
+      1
+    ).setStrokeStyle(1, 0x8b5cf6, 0.5)
+    this.container.add(this.xpBar)
+
+    // XP fill
+    const xp = player.xp || 0
+    const xpNeeded = this.xpForLevel(level)
+    const xpPercent = Math.min(1, xp / xpNeeded)
+
+    this.xpFill = this.scene.add.rectangle(
+      xpBarStartX + 1,
+      xpY,
+      Math.max(1, (xpBarWidth - 2) * xpPercent),
+      6,
+      0x8b5cf6
+    ).setOrigin(0, 0.5)
+    this.container.add(this.xpFill)
+
+    // XP text
+    this.xpText = this.scene.add.text(
+      xpBarStartX + xpBarWidth + 5,
+      xpY,
+      `${xp}/${xpNeeded}`,
+      {
+        fontSize: '8px',
+        color: '#c4b5fd'
+      }
+    ).setOrigin(0, 0.5)
+    this.container.add(this.xpText)
+
     // Start update loop
     this.startUpdating()
 
@@ -323,6 +385,27 @@ export class PlayerStatsBar {
       // Reset stored duration for next cooldown
       this.cooldownDuration = null
     }
+
+    // Update XP bar
+    if (this.xpFill && this.xpText && this.levelText) {
+      const level = player.level || 1
+      const xp = player.xp || 0
+      const xpNeeded = this.xpForLevel(level)
+      const xpPercent = Math.min(1, xp / xpNeeded)
+      const xpBarWidth = this.width - 80
+
+      this.xpFill.width = Math.max(1, (xpBarWidth - 2) * xpPercent)
+      this.xpText.setText(`${xp}/${xpNeeded}`)
+      this.levelText.setText(`Lv.${level}`)
+
+      // Glow effect when close to leveling up
+      if (xpPercent > 0.9) {
+        const glow = 0.7 + Math.sin(Date.now() * 0.01) * 0.3
+        this.xpFill.setAlpha(glow)
+      } else {
+        this.xpFill.setAlpha(1)
+      }
+    }
   }
 
   // Show a warning message (e.g., "Not enough energy!")
@@ -383,7 +466,7 @@ export class PlayerStatsBar {
 
   // Get the height of the stats bar (for positioning content below)
   getHeight() {
-    return 65
+    return 85 // Increased to include XP bar
   }
 
   destroy() {

@@ -25,6 +25,23 @@ export class CommerceHubScene extends BaseScene {
     this.readiness = null // SceneReadinessManager instance
   }
 
+  /**
+   * Get dynamic trading prices from localStorage cache
+   * These are the same prices TradingScene generates and caches
+   */
+  getDynamicTradingPrices() {
+    try {
+      const stored = localStorage.getItem('street_legacy_trading')
+      if (stored) {
+        const tradingData = JSON.parse(stored)
+        return tradingData.prices || {}
+      }
+    } catch (e) {
+      console.warn('[CommerceHubScene] Failed to load trading prices:', e)
+    }
+    return {}
+  }
+
   init(data) {
     super.init(data)
     console.log('[CommerceHubScene] init() called with data:', JSON.stringify(data || {}))
@@ -354,8 +371,14 @@ export class CommerceHubScene extends BaseScene {
     }).setOrigin(1, 0).setDepth(DEPTH.PANEL_CONTENT)
     this.contentItems.push(hintText)
 
-    // Available goods
-    const goods = TRADING_GOODS.filter(g => playerLevel >= g.min_level)
+    // Available goods with dynamic prices
+    const dynamicPrices = this.getDynamicTradingPrices()
+    const goods = TRADING_GOODS.filter(g => playerLevel >= g.min_level).map(good => ({
+      ...good,
+      currentBuyPrice: dynamicPrices[good.id]?.buyPrice || good.buy_price,
+      currentSellPrice: dynamicPrices[good.id]?.sellPrice || good.sell_price,
+      trend: dynamicPrices[good.id]?.trend || 'stable'
+    }))
     const cardHeight = 65
     const cardSpacing = 6
 
@@ -423,14 +446,19 @@ export class CommerceHubScene extends BaseScene {
     }).setDepth(DEPTH.PANEL_CONTENT)
     this.contentItems.push(riskText)
 
-    // Prices
-    const buyText = this.add.text(width - 100, y + 15, `BUY: ${formatMoney(good.buy_price)}`, {
+    // Prices (dynamic from market)
+    const trendIcons = { up: '^', down: 'v', stable: '-' }
+    const trendColors = { up: 0x22C55E, down: 0xEF4444, stable: 0x888888 }
+    const trendIcon = trendIcons[good.trend] || '-'
+    const trendColor = trendColors[good.trend] || COLORS.text.muted
+
+    const buyText = this.add.text(width - 100, y + 15, `BUY: ${formatMoney(good.currentBuyPrice || good.buy_price)}`, {
       ...getTextStyle('xs', COLORS.text.muted, 'terminal')
     }).setOrigin(0, 0).setDepth(DEPTH.PANEL_CONTENT)
     this.contentItems.push(buyText)
 
-    const sellText = this.add.text(width - 100, y + 32, `SELL: ${formatMoney(good.sell_price)}`, {
-      ...getTextStyle('xs', 0x22C55E, 'terminal')
+    const sellText = this.add.text(width - 100, y + 32, `SELL: ${formatMoney(good.currentSellPrice || good.sell_price)} ${trendIcon}`, {
+      ...getTextStyle('xs', trendColor, 'terminal')
     }).setOrigin(0, 0).setDepth(DEPTH.PANEL_CONTENT)
     this.contentItems.push(sellText)
   }

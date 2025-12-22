@@ -443,27 +443,38 @@ class AudioManagerClass {
   // ==========================================================================
 
   /**
-   * Play a sound effect
+   * Play a sound effect (safe - never throws)
    * @param {string} key - Audio key
    * @param {Object} config - Optional config (volume, rate, detune)
    */
   playSFX(key, config = {}) {
-    if (!this.scene || !this.scene.sound) return
-    if (!this.sfxEnabled) return
+    try {
+      if (!this.scene || !this.scene.sound) return
+      if (!this.sfxEnabled) return
 
-    if (!this.scene.cache.audio.exists(key)) {
-      // Log missing sounds in development to help identify audio issues
-      console.warn(`[AudioManager] Missing sound effect: ${key}`)
-      return
+      if (!this.scene.cache.audio.exists(key)) {
+        // Log missing sounds in development to help identify audio issues
+        if (!this._missingAudioWarned?.[key]) {
+          this._missingAudioWarned = this._missingAudioWarned || {}
+          this._missingAudioWarned[key] = true
+          console.warn(`[AudioManager] Missing sound effect: ${key}`)
+        }
+        return
+      }
+
+      const volume = (config.volume ?? 1) * this.sfxVolume * this.masterVolume
+
+      this.scene.sound.play(key, {
+        volume: volume,
+        rate: config.rate ?? 1,
+        detune: config.detune ?? 0
+      })
+    } catch (error) {
+      // Audio errors should never crash the game - log in debug only
+      if (typeof import.meta !== 'undefined' && !import.meta.env?.PROD) {
+        console.warn(`[AudioManager] Failed to play SFX: ${key}`, error)
+      }
     }
-
-    const volume = (config.volume ?? 1) * this.sfxVolume * this.masterVolume
-
-    this.scene.sound.play(key, {
-      volume: volume,
-      rate: config.rate ?? 1,
-      detune: config.detune ?? 0
-    })
   }
 
   /**

@@ -3,7 +3,7 @@ import { gameManager } from '../GameManager'
 import { formatMoney } from '../../utils/formatters'
 import { getPlayerData, savePlayerData } from '../data/GameData'
 import { audioManager } from '../managers/AudioManager'
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 /**
  * ReputationScene - "Rags" Tab - Player reputation and street cred tracking
@@ -281,11 +281,11 @@ export class ReputationScene extends Phaser.Scene {
       fontFamily: 'Arial'
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {
-      closeBtn.setColor('#f59e0b')
+      closeBtn.setColor('#ef4444')
       closeBtn.setScale(1.2)
     })
     closeBtn.on('pointerout', () => {

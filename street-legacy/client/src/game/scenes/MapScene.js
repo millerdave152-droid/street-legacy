@@ -6,6 +6,7 @@ import { DistrictStateIndicator } from '../ui/DistrictStateIndicator.js'
 import { DistrictDetailPanel } from '../ui/DistrictDetailPanel.js'
 import { districtEcosystemService } from '../../services/districtEcosystem.service.js'
 import { audioManager } from '../managers/AudioManager'
+import { DEPTH } from '../ui/NetworkTheme'
 
 export class MapScene extends Phaser.Scene {
   constructor() {
@@ -213,11 +214,11 @@ export class MapScene extends Phaser.Scene {
       fontFamily: 'Arial'
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {
-      closeBtn.setColor('#3b82f6')
+      closeBtn.setColor('#ef4444')
       closeBtn.setScale(1.2)
     })
     closeBtn.on('pointerout', () => {

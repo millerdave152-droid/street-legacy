@@ -20,6 +20,11 @@ export class TradingScene extends Phaser.Scene {
     this.goods = []
     this.playerInventory = []
     this.currentTab = 'buy' // 'buy', 'sell'
+    // Quantity selector state
+    this.selectedGood = null
+    this.selectedQuantity = 1
+    this.modalContainer = null
+    this.modalMode = null // 'buy' or 'sell'
   }
 
   async create() {
@@ -200,10 +205,11 @@ export class TradingScene extends Phaser.Scene {
   createTabs() {
     const { width } = this.cameras.main
     const tabY = 110
-    const tabWidth = 120
+    const tabWidth = 100
     const tabs = [
-      { key: 'buy', label: 'Buy Goods' },
-      { key: 'sell', label: 'Sell Goods' }
+      { key: 'buy', label: 'Buy' },
+      { key: 'sell', label: 'Sell' },
+      { key: 'history', label: 'History' }
     ]
 
     this.tabButtons = []
@@ -263,6 +269,9 @@ export class TradingScene extends Phaser.Scene {
         break
       case 'sell':
         this.showSellGoods()
+        break
+      case 'history':
+        this.showHistory()
         break
     }
   }
@@ -340,7 +349,7 @@ export class TradingScene extends Phaser.Scene {
 
         buyBtn.on('pointerover', () => buyBtn.setFillStyle(COLORS.network.primary))
         buyBtn.on('pointerout', () => buyBtn.setFillStyle(COLORS.status.info))
-        buyBtn.on('pointerdown', () => this.buyGood(good))
+        buyBtn.on('pointerdown', () => this.showQuantityModal(good, 'buy', 999))
       } else if (!good.canBuy) {
         this.contentContainer.add(
           this.add.text(width - 55, y + cardHeight / 2 - 5, SYMBOLS.locked, {
@@ -436,8 +445,121 @@ export class TradingScene extends Phaser.Scene {
 
       sellBtn.on('pointerover', () => sellBtn.setFillStyle(COLORS.network.primary))
       sellBtn.on('pointerout', () => sellBtn.setFillStyle(COLORS.status.warning))
-      sellBtn.on('pointerdown', () => this.sellGood(item, good))
+      sellBtn.on('pointerdown', () => this.showQuantityModal(good, 'sell', item.quantity || 1))
     })
+  }
+
+  showHistory() {
+    const { width, height } = this.cameras.main
+    const startY = 170
+    const rowHeight = 50
+
+    // Load transaction history
+    let history = []
+    try {
+      const stored = localStorage.getItem('street_legacy_trade_history')
+      history = stored ? JSON.parse(stored) : []
+    } catch (e) {
+      history = []
+    }
+
+    if (history.length === 0) {
+      this.contentContainer.add(
+        this.add.text(width / 2, height / 2 - 30, 'No transactions yet', {
+          fontSize: '18px',
+          color: '#666666'
+        }).setOrigin(0.5)
+      )
+      this.contentContainer.add(
+        this.add.text(width / 2, height / 2 + 10, 'Your buy/sell history will appear here', {
+          fontSize: '14px',
+          color: '#888888'
+        }).setOrigin(0.5)
+      )
+      return
+    }
+
+    // Calculate total P&L
+    let totalProfit = 0
+    history.forEach(tx => {
+      if (tx.type === 'sell') {
+        totalProfit += tx.total
+      } else {
+        totalProfit -= tx.total
+      }
+    })
+
+    // Show P&L summary
+    const plColor = totalProfit >= 0 ? toHexString(COLORS.status.success) : toHexString(COLORS.status.danger)
+    const plText = this.add.text(width / 2, startY - 20,
+      `Net P&L: ${totalProfit >= 0 ? '+' : ''}${formatMoney(totalProfit)}`, {
+      fontSize: '14px',
+      color: plColor,
+      fontStyle: 'bold'
+    }).setOrigin(0.5)
+    this.contentContainer.add(plText)
+
+    // Show recent transactions (up to 10)
+    const maxDisplay = Math.min(history.length, 10)
+    history.slice(0, maxDisplay).forEach((tx, index) => {
+      const y = startY + 10 + index * rowHeight
+      if (y > height - 80) return
+
+      // Row background
+      const rowBg = this.add.rectangle(width / 2, y + rowHeight / 2 - 5, width - 60, rowHeight - 6,
+        index % 2 === 0 ? COLORS.bg.card : COLORS.bg.panel)
+      this.contentContainer.add(rowBg)
+
+      // Transaction type icon and good name
+      const typeIcon = tx.type === 'buy' ? '-' : '+'
+      const typeColor = tx.type === 'buy' ? toHexString(COLORS.status.danger) : toHexString(COLORS.status.success)
+
+      this.contentContainer.add(
+        this.add.text(40, y + 8, `${typeIcon} ${tx.goodName} x${tx.quantity}`, {
+          fontSize: '13px',
+          color: toHexString(COLORS.text.primary),
+          fontStyle: 'bold'
+        })
+      )
+
+      // Time ago
+      const timeAgo = this.formatTimeAgo(tx.timestamp)
+      this.contentContainer.add(
+        this.add.text(40, y + 26, timeAgo, {
+          fontSize: '10px',
+          color: toHexString(COLORS.text.muted)
+        })
+      )
+
+      // Amount
+      this.contentContainer.add(
+        this.add.text(width - 40, y + 17, `${tx.type === 'buy' ? '-' : '+'}${formatMoney(tx.total)}`, {
+          fontSize: '14px',
+          color: typeColor
+        }).setOrigin(1, 0.5)
+      )
+    })
+
+    if (history.length > maxDisplay) {
+      this.contentContainer.add(
+        this.add.text(width / 2, startY + 10 + maxDisplay * rowHeight + 10,
+          `+ ${history.length - maxDisplay} more transactions`, {
+          fontSize: '11px',
+          color: toHexString(COLORS.text.muted)
+        }).setOrigin(0.5)
+      )
+    }
+  }
+
+  formatTimeAgo(timestamp) {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000)
+    if (seconds < 60) return 'Just now'
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h ago`
+    const days = Math.floor(hours / 24)
+    return `${days}d ago`
   }
 
   buyGood(good) {
@@ -455,7 +577,12 @@ export class TradingScene extends Phaser.Scene {
 
     const existing = player.tradingGoods.find(g => g.id === good.id)
     if (existing) {
-      existing.quantity = (existing.quantity || 1) + 1
+      // Calculate weighted average purchase price
+      const oldQuantity = existing.quantity || 1
+      const oldTotal = existing.boughtAt * oldQuantity
+      const newTotal = oldTotal + good.currentBuyPrice
+      existing.quantity = oldQuantity + 1
+      existing.boughtAt = Math.round(newTotal / existing.quantity)
     } else {
       player.tradingGoods.push({
         id: good.id,
@@ -527,5 +654,315 @@ export class TradingScene extends Phaser.Scene {
     try {
       sceneManager.resume('UIScene')
     } catch (e) {}
+  }
+
+  /**
+   * Show quantity selector modal for buying/selling
+   */
+  showQuantityModal(good, mode, maxQuantity) {
+    const { width, height } = this.cameras.main
+    const player = gameManager.player || getPlayerData()
+
+    // Close any existing modal
+    this.closeModal()
+
+    this.selectedGood = good
+    this.selectedQuantity = 1
+    this.modalMode = mode
+
+    // Calculate max affordable/sellable
+    const price = mode === 'buy' ? good.currentBuyPrice : good.currentSellPrice
+    const maxAffordable = mode === 'buy'
+      ? Math.floor((player.cash || 0) / price)
+      : maxQuantity
+
+    this.maxQuantity = Math.min(maxQuantity, maxAffordable)
+    if (this.maxQuantity <= 0) return
+
+    // Create modal container
+    this.modalContainer = this.add.container(0, 0).setDepth(500)
+
+    // Backdrop
+    const backdrop = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.8)
+      .setInteractive()
+    backdrop.on('pointerdown', () => this.closeModal())
+    this.modalContainer.add(backdrop)
+
+    // Modal panel
+    const panelWidth = 320
+    const panelHeight = 280
+    const panelX = width / 2
+    const panelY = height / 2
+
+    const panel = this.add.rectangle(panelX, panelY, panelWidth, panelHeight, COLORS.bg.elevated)
+      .setStrokeStyle(2, COLORS.status.info)
+      .setInteractive() // Block clicks from reaching backdrop
+    this.modalContainer.add(panel)
+
+    // Title
+    const title = this.add.text(panelX, panelY - 110,
+      `${mode === 'buy' ? 'BUY' : 'SELL'}: ${good.name}`, {
+      fontSize: '18px',
+      color: toHexString(COLORS.text.primary),
+      fontStyle: 'bold'
+    }).setOrigin(0.5)
+    this.modalContainer.add(title)
+
+    // Price per unit
+    const priceLabel = this.add.text(panelX, panelY - 80,
+      `Price: ${formatMoney(price)} each`, {
+      fontSize: '13px',
+      color: toHexString(COLORS.text.secondary)
+    }).setOrigin(0.5)
+    this.modalContainer.add(priceLabel)
+
+    // Quantity selector row
+    const qtyY = panelY - 30
+
+    // Minus button
+    const minusBtn = this.add.rectangle(panelX - 80, qtyY, 40, 40, COLORS.bg.panel)
+      .setStrokeStyle(1, COLORS.text.muted)
+      .setInteractive({ useHandCursor: true })
+    minusBtn.on('pointerdown', () => this.adjustQuantity(-1))
+    minusBtn.on('pointerover', () => minusBtn.setFillStyle(COLORS.bg.card))
+    minusBtn.on('pointerout', () => minusBtn.setFillStyle(COLORS.bg.panel))
+    this.modalContainer.add(minusBtn)
+
+    const minusText = this.add.text(panelX - 80, qtyY, '-', {
+      fontSize: '24px',
+      color: toHexString(COLORS.text.primary)
+    }).setOrigin(0.5)
+    this.modalContainer.add(minusText)
+
+    // Quantity display
+    this.qtyText = this.add.text(panelX, qtyY, '1', {
+      fontSize: '28px',
+      color: toHexString(COLORS.text.primary),
+      fontStyle: 'bold'
+    }).setOrigin(0.5)
+    this.modalContainer.add(this.qtyText)
+
+    // Plus button
+    const plusBtn = this.add.rectangle(panelX + 80, qtyY, 40, 40, COLORS.bg.panel)
+      .setStrokeStyle(1, COLORS.text.muted)
+      .setInteractive({ useHandCursor: true })
+    plusBtn.on('pointerdown', () => this.adjustQuantity(1))
+    plusBtn.on('pointerover', () => plusBtn.setFillStyle(COLORS.bg.card))
+    plusBtn.on('pointerout', () => plusBtn.setFillStyle(COLORS.bg.panel))
+    this.modalContainer.add(plusBtn)
+
+    const plusText = this.add.text(panelX + 80, qtyY, '+', {
+      fontSize: '24px',
+      color: toHexString(COLORS.text.primary)
+    }).setOrigin(0.5)
+    this.modalContainer.add(plusText)
+
+    // Quick quantity buttons
+    const quickY = qtyY + 50
+    const quickBtns = [1, 5, 10, 'MAX']
+    const btnSpacing = 70
+    const startX = panelX - (quickBtns.length - 1) * btnSpacing / 2
+
+    quickBtns.forEach((qty, i) => {
+      const x = startX + i * btnSpacing
+      const qtyValue = qty === 'MAX' ? this.maxQuantity : qty
+      const isDisabled = qtyValue > this.maxQuantity
+
+      const btn = this.add.rectangle(x, quickY, 55, 30,
+        isDisabled ? COLORS.bg.panel : COLORS.bg.card)
+        .setStrokeStyle(1, isDisabled ? COLORS.text.muted : COLORS.status.info)
+        .setInteractive({ useHandCursor: !isDisabled })
+
+      if (!isDisabled) {
+        btn.on('pointerdown', () => this.setQuantity(qtyValue))
+        btn.on('pointerover', () => btn.setFillStyle(COLORS.status.info))
+        btn.on('pointerout', () => btn.setFillStyle(COLORS.bg.card))
+      }
+      this.modalContainer.add(btn)
+
+      const btnLabel = this.add.text(x, quickY, qty === 'MAX' ? 'MAX' : `x${qty}`, {
+        fontSize: '12px',
+        color: isDisabled ? toHexString(COLORS.text.muted) : toHexString(COLORS.text.primary)
+      }).setOrigin(0.5)
+      this.modalContainer.add(btnLabel)
+    })
+
+    // Total cost/revenue display
+    this.totalText = this.add.text(panelX, panelY + 45,
+      `Total: ${formatMoney(price)}`, {
+      fontSize: '16px',
+      color: mode === 'buy' ? toHexString(COLORS.text.gold) : toHexString(COLORS.status.success),
+      fontStyle: 'bold'
+    }).setOrigin(0.5)
+    this.modalContainer.add(this.totalText)
+
+    // Confirm button
+    const confirmBtn = this.add.rectangle(panelX, panelY + 95, 140, 45,
+      mode === 'buy' ? COLORS.status.info : COLORS.status.warning)
+      .setInteractive({ useHandCursor: true })
+    confirmBtn.on('pointerdown', () => this.confirmTransaction())
+    confirmBtn.on('pointerover', () => confirmBtn.setFillStyle(COLORS.network.primary))
+    confirmBtn.on('pointerout', () => confirmBtn.setFillStyle(
+      mode === 'buy' ? COLORS.status.info : COLORS.status.warning))
+    this.modalContainer.add(confirmBtn)
+
+    const confirmText = this.add.text(panelX, panelY + 95,
+      mode === 'buy' ? 'CONFIRM BUY' : 'CONFIRM SELL', {
+      fontSize: '14px',
+      color: toHexString(COLORS.bg.void),
+      fontStyle: 'bold'
+    }).setOrigin(0.5)
+    this.modalContainer.add(confirmText)
+
+    // Cancel button
+    const cancelBtn = this.add.text(panelX, panelY + 130, 'Cancel', {
+      fontSize: '12px',
+      color: toHexString(COLORS.text.muted)
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true })
+    cancelBtn.on('pointerdown', () => this.closeModal())
+    cancelBtn.on('pointerover', () => cancelBtn.setColor(toHexString(COLORS.text.primary)))
+    cancelBtn.on('pointerout', () => cancelBtn.setColor(toHexString(COLORS.text.muted)))
+    this.modalContainer.add(cancelBtn)
+  }
+
+  adjustQuantity(delta) {
+    const newQty = this.selectedQuantity + delta
+    if (newQty >= 1 && newQty <= this.maxQuantity) {
+      this.setQuantity(newQty)
+    }
+  }
+
+  setQuantity(qty) {
+    this.selectedQuantity = Math.max(1, Math.min(qty, this.maxQuantity))
+    const price = this.modalMode === 'buy'
+      ? this.selectedGood.currentBuyPrice
+      : this.selectedGood.currentSellPrice
+    const total = price * this.selectedQuantity
+
+    if (this.qtyText) this.qtyText.setText(this.selectedQuantity.toString())
+    if (this.totalText) this.totalText.setText(`Total: ${formatMoney(total)}`)
+  }
+
+  confirmTransaction() {
+    const good = this.selectedGood
+    const qty = this.selectedQuantity
+    const mode = this.modalMode
+
+    if (!good || qty <= 0) return
+
+    if (mode === 'buy') {
+      this.executeBuy(good, qty)
+    } else {
+      this.executeSell(good, qty)
+    }
+
+    this.closeModal()
+  }
+
+  executeBuy(good, quantity) {
+    const player = gameManager.player || getPlayerData()
+    const totalCost = good.currentBuyPrice * quantity
+
+    if ((player.cash || 0) < totalCost) return
+
+    // Deduct cash
+    player.cash -= totalCost
+
+    // Add to trading goods
+    if (!player.tradingGoods) player.tradingGoods = []
+
+    const existing = player.tradingGoods.find(g => g.id === good.id)
+    if (existing) {
+      // Calculate weighted average purchase price
+      const oldQuantity = existing.quantity || 1
+      const oldTotal = existing.boughtAt * oldQuantity
+      const newTotal = oldTotal + totalCost
+      existing.quantity = oldQuantity + quantity
+      existing.boughtAt = Math.round(newTotal / existing.quantity)
+    } else {
+      player.tradingGoods.push({
+        id: good.id,
+        name: good.name,
+        quantity: quantity,
+        boughtAt: good.currentBuyPrice
+      })
+    }
+
+    // Log transaction
+    this.logTransaction('buy', good, quantity, good.currentBuyPrice)
+
+    savePlayerData(player)
+    gameManager.player = player
+
+    try { audioManager.playClick() } catch (e) {}
+
+    // Refresh
+    this.loadData()
+    this.showCurrentTab()
+  }
+
+  executeSell(good, quantity) {
+    const player = gameManager.player || getPlayerData()
+    const item = player.tradingGoods?.find(g => g.id === good.id)
+    if (!item || item.quantity < quantity) return
+
+    const sellPrice = good.currentSellPrice || good.sell_price
+    const totalRevenue = sellPrice * quantity
+
+    // Add cash
+    player.cash += totalRevenue
+
+    // Remove from inventory
+    item.quantity -= quantity
+    if (item.quantity <= 0) {
+      const idx = player.tradingGoods.indexOf(item)
+      player.tradingGoods.splice(idx, 1)
+    }
+
+    // Log transaction
+    this.logTransaction('sell', good, quantity, sellPrice)
+
+    savePlayerData(player)
+    gameManager.player = player
+
+    try { audioManager.playCashGain(totalRevenue) } catch (e) {}
+
+    // Refresh
+    this.loadData()
+    this.showCurrentTab()
+  }
+
+  logTransaction(type, good, quantity, price) {
+    try {
+      const stored = localStorage.getItem('street_legacy_trade_history')
+      const history = stored ? JSON.parse(stored) : []
+
+      history.unshift({
+        type,
+        goodId: good.id,
+        goodName: good.name,
+        quantity,
+        price,
+        total: price * quantity,
+        timestamp: Date.now()
+      })
+
+      // Keep only last 50 transactions
+      if (history.length > 50) history.length = 50
+
+      localStorage.setItem('street_legacy_trade_history', JSON.stringify(history))
+    } catch (e) {
+      console.warn('[TradingScene] Failed to log transaction:', e)
+    }
+  }
+
+  closeModal() {
+    if (this.modalContainer) {
+      this.modalContainer.destroy()
+      this.modalContainer = null
+    }
+    this.selectedGood = null
+    this.selectedQuantity = 1
+    this.modalMode = null
   }
 }
