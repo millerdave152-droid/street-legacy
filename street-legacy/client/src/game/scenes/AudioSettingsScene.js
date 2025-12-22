@@ -2,7 +2,7 @@ import Phaser from 'phaser'
 import { audioManager } from '../managers/AudioManager'
 import { tutorialManager } from '../managers/TutorialManager'
 import { VERSION } from '../config/Constants'
-import { COLORS, BORDERS, getTerminalStyle, toHexString } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTerminalStyle, toHexString } from '../ui/NetworkTheme'
 
 /**
  * AudioSettingsScene - Audio settings overlay
@@ -52,7 +52,7 @@ export class AudioSettingsScene extends Phaser.Scene {
       color: toHexString(COLORS.text.primary)
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

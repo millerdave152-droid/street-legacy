@@ -6,6 +6,7 @@ import { notificationManager } from '../managers/NotificationManager'
 import { gameManager } from '../GameManager'
 import { getPlayerData, savePlayerData } from '../data/GameData'
 import { formatMoney } from '../../utils/formatters'
+import { DEPTH } from '../ui/NetworkTheme'
 
 /**
  * DebtScene - Debt Economy Management
@@ -249,7 +250,7 @@ export class DebtScene extends BaseScene {
       color: '#ffffff'
     })
       .setOrigin(0.5)
-      .setDepth(999)
+      .setDepth(DEPTH.CLOSE_BUTTON)
       .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

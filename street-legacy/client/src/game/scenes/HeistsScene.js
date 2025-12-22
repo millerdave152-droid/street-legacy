@@ -17,7 +17,7 @@ import {
   checkHeistRequirements,
   getTimeOfDay
 } from '../data/GameData.js'
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 /**
  * HeistsScene - Solo heist planning and execution (Local Data Mode)
@@ -125,7 +125,7 @@ export class HeistsScene extends Phaser.Scene {
       ...getTextStyle('display', COLORS.text.primary),
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {
@@ -282,7 +282,7 @@ export class HeistsScene extends Phaser.Scene {
       ...getTextStyle('display', COLORS.text.primary),
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => closeBtn.setColor(toHexString(COLORS.status.warning)))

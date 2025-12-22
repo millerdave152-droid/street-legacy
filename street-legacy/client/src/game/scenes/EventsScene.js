@@ -6,7 +6,7 @@ import { audioManager } from '../managers/AudioManager'
 import { networkMessageManager } from '../managers/NetworkMessageManager'
 
 // Network Theme
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 // Local storage helpers
 const getPlayerData = () => {
@@ -445,7 +445,7 @@ export class EventsScene extends Phaser.Scene {
       fontFamily: 'Arial'
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

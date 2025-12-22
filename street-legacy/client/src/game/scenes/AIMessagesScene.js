@@ -13,6 +13,7 @@ import { aiMessageManager } from '../managers/AIMessageManager.js'
 import { aiPlayerManager } from '../managers/AIPlayerManager.js'
 import { getPersonality, PERSONALITIES } from '../data/AIPersonalities.js'
 import { gameManager } from '../GameManager.js'
+import { DEPTH } from '../ui/NetworkTheme.js'
 import { notificationManager } from '../managers/NotificationManager.js'
 import { formatMoney } from '../../utils/formatters.js'
 
@@ -87,7 +88,7 @@ export class AIMessagesScene extends Phaser.Scene {
       color: '#ffffff'
     })
       .setOrigin(0.5)
-      .setDepth(999)
+      .setDepth(DEPTH.CLOSE_BUTTON)
       .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

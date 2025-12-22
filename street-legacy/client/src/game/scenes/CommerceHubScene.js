@@ -780,18 +780,22 @@ export class CommerceHubScene extends BaseScene {
   openFullScene(sceneName) {
     console.log(`[CommerceHubScene] Navigating to ${sceneName}`)
 
-    // Resume UIScene before transitioning - original scenes expect it to be active
-    try {
-      this.scene.resume('UIScene')
-    } catch (e) {
-      console.error('[CommerceHubScene] Failed to resume UIScene:', e)
+    // Validate scene exists before navigation
+    if (!this.scene.get(sceneName)) {
+      console.error(`[CommerceHubScene] Scene not found: ${sceneName}`)
+      this.showToast(`Scene "${sceneName}" not available`, 'error')
+      return
     }
 
-    // DO NOT resume GameScene here - keep it paused with input disabled
-    // The target scene will handle returning to GameScene when done
+    // Disable input on this scene first to prevent double-taps
+    this.input.enabled = false
 
-    // Use scene.start() for cleaner transition to sub-scenes
-    this.scene.start(sceneName)
+    // Stop this scene first, THEN start the new scene
+    // This ensures clean transition without race conditions
+    this.scene.stop()
+
+    // Start the target scene fresh
+    this.scene.start(sceneName, { returnScene: 'GameScene' })
   }
 
   closeScene() {

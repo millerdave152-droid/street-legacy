@@ -2,7 +2,7 @@ import Phaser from 'phaser'
 import { gameManager } from '../GameManager'
 import { getPlayerData, savePlayerData, clearPlayerData } from '../data/GameData'
 import { audioManager } from '../managers/AudioManager'
-import { COLORS, BORDERS, getTerminalStyle, toHexString } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTerminalStyle, toHexString } from '../ui/NetworkTheme'
 
 /**
  * SettingsScene - Game settings and preferences (Local Data Mode)
@@ -92,7 +92,7 @@ export class SettingsScene extends Phaser.Scene {
       color: toHexString(COLORS.text.primary)
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

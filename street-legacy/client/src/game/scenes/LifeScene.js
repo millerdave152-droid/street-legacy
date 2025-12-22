@@ -4,6 +4,7 @@ import { narrativeService } from '../../services/narrativeSystems.service'
 import { audioManager } from '../managers/AudioManager'
 import { notificationManager } from '../managers/NotificationManager'
 import { gameManager } from '../GameManager'
+import { DEPTH } from '../ui/NetworkTheme'
 
 // Helper functions for local storage
 const getPlayerData = () => {
@@ -165,7 +166,7 @@ export class LifeScene extends BaseScene {
       color: '#ffffff'
     })
       .setOrigin(0.5)
-      .setDepth(999)
+      .setDepth(DEPTH.CLOSE_BUTTON)
       .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

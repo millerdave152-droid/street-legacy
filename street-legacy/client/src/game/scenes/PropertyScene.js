@@ -5,7 +5,7 @@ import { playerService } from '../../services/player.service'
 import { achievementPopup } from '../ui/AchievementPopup'
 import { getPlayerData, savePlayerData, PROPERTIES } from '../data/GameData'
 import { audioManager } from '../managers/AudioManager'
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 /**
  * PropertyScene - Full property management system
@@ -293,7 +293,7 @@ export class PropertyScene extends Phaser.Scene {
       color: toHexString(COLORS.text.primary)
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

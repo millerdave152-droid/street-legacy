@@ -4,7 +4,7 @@ import { formatMoney } from '../../utils/formatters'
 import { audioManager } from '../managers/AudioManager'
 import { TRADING_GOODS, getPlayerData, savePlayerData } from '../data/GameData.js'
 import { aiSimulationManager } from '../managers/AISimulationManager.js'
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 /**
  * TradingScene - Local Buy/Sell Trading (Local Data Mode)
@@ -185,7 +185,7 @@ export class TradingScene extends Phaser.Scene {
       fontFamily: 'Arial'
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

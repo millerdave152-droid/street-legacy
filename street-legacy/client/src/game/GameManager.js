@@ -1163,6 +1163,38 @@ class GameManagerClass {
     }
   }
 
+  async sellProperty(propertyId) {
+    // Handle locally since there's no backend endpoint
+    if (!this.player) {
+      throw new Error('Player not loaded')
+    }
+
+    // Find the property in player's owned properties
+    const ownedIndex = this.player.properties?.findIndex(p => p.id === propertyId || p.property_id === propertyId)
+    if (ownedIndex === -1 || ownedIndex === undefined) {
+      this.addNotification('danger', 'Property not found in inventory')
+      throw new Error('Property not found')
+    }
+
+    const ownedProperty = this.player.properties[ownedIndex]
+
+    // Calculate sell price (50% of purchase price)
+    const purchasePrice = ownedProperty.purchase_price || ownedProperty.price || 5000
+    const sellPrice = Math.floor(purchasePrice * 0.5)
+
+    // Add cash and remove property
+    this.player.cash = (this.player.cash || 0) + sellPrice
+    this.player.properties.splice(ownedIndex, 1)
+
+    // Save changes
+    this.savePlayer()
+    this.emit('playerUpdated', this.player)
+    this.addNotification('success', `Sold property for $${sellPrice.toLocaleString()}`)
+    this.emit('propertySold', { propertyId, sellPrice })
+
+    return { success: true, sellPrice, propertyId }
+  }
+
   async useItem(inventoryId) {
     // Use local data if enabled
     if (this.useLocalData) {

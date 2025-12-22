@@ -4,6 +4,7 @@ import { formatMoney } from '../../utils/formatters'
 import { COLORS } from '../../utils/constants'
 import { aiPlayerManager } from '../managers/AIPlayerManager.js'
 import { getPersonality } from '../data/AIPersonalities.js'
+import { DEPTH } from '../ui/NetworkTheme'
 
 // Local storage helpers
 const getPlayerData = () => {
@@ -202,7 +203,7 @@ export class LeaderboardScene extends Phaser.Scene {
       fontFamily: 'Arial'
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

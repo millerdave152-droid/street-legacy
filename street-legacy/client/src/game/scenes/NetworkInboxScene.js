@@ -6,7 +6,7 @@
  */
 
 import Phaser from 'phaser'
-import { COLORS, BORDERS, getTerminalStyle, toHexString, SYMBOLS, createNetworkHeader, createEncryptedIndicator, createGlowBorder } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTerminalStyle, toHexString, SYMBOLS, createNetworkHeader, createEncryptedIndicator, createGlowBorder } from '../ui/NetworkTheme'
 import { networkMessageManager, MESSAGE_TYPES } from '../managers/NetworkMessageManager'
 import { audioManager } from '../managers/AudioManager'
 
@@ -177,7 +177,7 @@ export default class NetworkInboxScene extends Phaser.Scene {
     const closeBtn = this.add.text(width - 25, 25, SYMBOLS.close, {
       ...getTerminalStyle('xl'),
       color: toHexString(COLORS.text.secondary)
-    }).setOrigin(0.5).setDepth(999).setInteractive({ useHandCursor: true })
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON).setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => closeBtn.setColor(toHexString(COLORS.status.danger)))
     closeBtn.on('pointerout', () => closeBtn.setColor(toHexString(COLORS.text.secondary)))

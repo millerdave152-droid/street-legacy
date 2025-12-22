@@ -3,6 +3,7 @@ import { BaseScene } from './BaseScene'
 import { narrativeService } from '../../services/narrativeSystems.service'
 import { audioManager } from '../managers/AudioManager'
 import { notificationManager } from '../managers/NotificationManager'
+import { DEPTH } from '../ui/NetworkTheme'
 
 // Local storage helpers
 const getPlayerData = () => {
@@ -278,7 +279,7 @@ export class NewsFeedScene extends BaseScene {
       color: '#ffffff'
     })
       .setOrigin(0.5)
-      .setDepth(999)
+      .setDepth(DEPTH.CLOSE_BUTTON)
       .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {

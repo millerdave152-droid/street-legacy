@@ -5,7 +5,7 @@ import { audioManager } from '../managers/AudioManager'
 import { notificationManager } from '../managers/NotificationManager'
 
 // Network Theme
-import { COLORS, BORDERS, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
 // Local storage helpers
 const getPlayerData = () => {
@@ -597,7 +597,7 @@ export class AchievementsScene extends Phaser.Scene {
       color: toHexString(COLORS.text.secondary)
     })
     .setOrigin(0.5)
-    .setDepth(999)
+    .setDepth(DEPTH.CLOSE_BUTTON)
     .setInteractive({ useHandCursor: true })
 
     closeBtn.on('pointerover', () => {
