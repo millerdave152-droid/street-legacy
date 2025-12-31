@@ -26,6 +26,16 @@ export class CrewScene extends Phaser.Scene {
     super({ key: 'CrewScene' })
   }
 
+  init(data) {
+    this.initData = data || {}
+    // Allow external tab selection (e.g., from ConnectionsHubScene)
+    if (data?.tab && ['hire', 'crew', 'train'].includes(data.tab)) {
+      this.initialTab = data.tab
+    } else {
+      this.initialTab = 'hire'
+    }
+  }
+
   async create() {
     console.log('[CrewScene] create() started')
     const { width, height } = this.cameras.main
@@ -111,7 +121,7 @@ export class CrewScene extends Phaser.Scene {
     this.availableHires = []
     this.contentItems = []
     this.scrollOffset = 0
-    this.activeTab = 'hire'
+    this.activeTab = this.initialTab || 'hire'
     this.isLoading = true
     this.crewSlots = { current: 0, max: 6 }  // Increased max slots
 

@@ -401,7 +401,7 @@ export class ConnectionsHubScene extends BaseScene {
     // View all button
     const btnY = height - 60
     this.createActionButton(width / 2, btnY, 'Manage Crew', 0x3B82F6, () => {
-      this.openFullScene('CrewScene')
+      this.openFullScene('CrewScene', { tab: 'crew' })
     })
   }
 
@@ -424,7 +424,7 @@ export class ConnectionsHubScene extends BaseScene {
     })
     card.on('pointerdown', () => {
       audioManager.playClick()
-      this.openFullScene('CrewScene')
+      this.openFullScene('CrewScene', { tab: 'crew' })
     })
 
     // Left accent
@@ -730,8 +730,8 @@ export class ConnectionsHubScene extends BaseScene {
     this.contentItems.push(btnLabel)
   }
 
-  openFullScene(sceneName) {
-    console.log(`[ConnectionsHubScene] Navigating to ${sceneName}`)
+  openFullScene(sceneName, extraData = {}) {
+    console.log(`[ConnectionsHubScene] Navigating to ${sceneName}`, extraData)
 
     // Validate scene exists before navigation
     if (!this.scene.get(sceneName)) {
@@ -747,8 +747,8 @@ export class ConnectionsHubScene extends BaseScene {
     // This ensures clean transition without race conditions
     this.scene.stop()
 
-    // Start the target scene fresh
-    this.scene.start(sceneName, { returnScene: 'GameScene' })
+    // Start the target scene fresh with any extra data
+    this.scene.start(sceneName, { returnScene: 'GameScene', ...extraData })
   }
 
   closeScene() {
