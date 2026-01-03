@@ -11,7 +11,7 @@ import { gameManager } from '../GameManager'
 import { formatMoney } from '../../utils/formatters'
 import { audioManager } from '../managers/AudioManager'
 import { SceneReadinessManager } from '../managers/SceneReadinessManager'
-import { getPlayerData, savePlayerData, LAWYERS, getPlayerLawyer, hireLawyer, fireLawyer, getLawyerCaseHistory, HEAT_REDUCTION_METHODS, performHeatReduction, getAllDistrictHeat, DISTRICTS, getEnergyStats } from '../data/GameData.js'
+import { getPlayerData, savePlayerData, LAWYERS, getPlayerLawyer, hireLawyer, fireLawyer, getLawyerCaseHistory, HEAT_REDUCTION_METHODS, performHeatReduction, getAllDistrictHeat, DISTRICTS, getEnergyStats, getAllAchievementsWithStatus, markSystemVisited, ACHIEVEMENTS } from '../data/GameData.js'
 import { COLORS, BORDERS, DEPTH, LAYOUT, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 import { networkTransition } from '../ui/NetworkTransition'
 
@@ -38,7 +38,7 @@ const ACHIEVEMENT_CATEGORIES = [
 export class SystemHubScene extends BaseScene {
   constructor() {
     super('SystemHubScene')
-    this.activeTab = 'rep' // 'rep' | 'stats' | 'events'
+    this.activeTab = 'stats' // 'stats' | 'achieve' | 'rep' | 'legal' | 'heat' | 'events'
     this.contentItems = []
     this.tabButtons = []
     this.readiness = null // SceneReadinessManager instance
@@ -95,6 +95,15 @@ export class SystemHubScene extends BaseScene {
 
     // Tab bar
     this.createTabBar()
+
+    // Mark system as visited (clears "new" badge on System module)
+    const player = gameManager.player || getPlayerData()
+    if (player) {
+      markSystemVisited(player)
+      if (gameManager.player) {
+        gameManager.player.lastSystemVisit = player.lastSystemVisit
+      }
+    }
 
     // AWAIT content loading (like CrimeScene does)
     try {
@@ -236,14 +245,15 @@ export class SystemHubScene extends BaseScene {
   createTabBar() {
     const { width } = this.cameras.main
     const tabY = 118
-    const tabWidth = (width - 40) / 5
+    const tabWidth = (width - 40) / 6
 
     const tabs = [
-      { key: 'rep', label: 'REP', icon: '[R]', color: 0xFBBF24 },
       { key: 'stats', label: 'STATS', icon: '[S]', color: 0x22C55E },
+      { key: 'achieve', label: 'ACHIEVE', icon: '[A]', color: 0xA855F7 },
+      { key: 'rep', label: 'REP', icon: '[R]', color: 0xFBBF24 },
       { key: 'legal', label: 'LEGAL', icon: '[L]', color: 0x3B82F6 },
       { key: 'heat', label: 'HEAT', icon: '[H]', color: 0xF97316 },
-      { key: 'events', label: 'EVENTS', icon: '[E]', color: 0xEF4444 }
+      { key: 'events', label: 'NEWS', icon: '[E]', color: 0xEF4444 }
     ]
 
     // Tab bar background
@@ -332,11 +342,14 @@ export class SystemHubScene extends BaseScene {
     loadingText.destroy()
 
     switch (this.activeTab) {
-      case 'rep':
-        this.renderRepContent(startY)
-        break
       case 'stats':
         this.renderStatsContent(startY)
+        break
+      case 'achieve':
+        this.renderAchievementsContent(startY)
+        break
+      case 'rep':
+        this.renderRepContent(startY)
         break
       case 'legal':
         this.renderLegalContent(startY)
@@ -565,6 +578,179 @@ export class SystemHubScene extends BaseScene {
     this.createActionButton(width / 2, btnY, 'All Achievements', 0x22C55E, () => {
       this.openFullScene('AchievementsScene')
     })
+  }
+
+  renderAchievementsContent(startY) {
+    const { width, height } = this.cameras.main
+    const player = gameManager.player || getPlayerData() || {}
+
+    // Get all achievements with status
+    const achievements = getAllAchievementsWithStatus(player)
+    const unlockedCount = achievements.filter(a => a.unlocked).length
+    const totalCount = achievements.length
+
+    // Section header with progress
+    const headerText = this.add.text(25, startY, `${SYMBOLS.system} ACHIEVEMENTS`, {
+      ...getTerminalStyle('sm'),
+      color: '#A855F7'
+    }).setDepth(DEPTH.PANEL_CONTENT)
+    this.contentItems.push(headerText)
+
+    const progressText = this.add.text(width - 25, startY, `${unlockedCount}/${totalCount}`, {
+      ...getTextStyle('sm', COLORS.text.muted, 'terminal')
+    }).setOrigin(1, 0).setDepth(DEPTH.PANEL_CONTENT)
+    this.contentItems.push(progressText)
+
+    // Progress bar
+    const barY = startY + 28
+    const barBg = this.add.rectangle(width / 2, barY, width - 40, 12, COLORS.bg.void)
+      .setStrokeStyle(1, 0xA855F7, 0.3)
+      .setDepth(DEPTH.CONTENT_BASE)
+    this.contentItems.push(barBg)
+
+    const progressPercent = totalCount > 0 ? (unlockedCount / totalCount) : 0
+    if (progressPercent > 0) {
+      const barFill = this.add.rectangle(30, barY, (width - 40) * progressPercent, 10, 0xA855F7, 0.8)
+        .setOrigin(0, 0.5)
+        .setDepth(DEPTH.PANEL_CONTENT)
+      this.contentItems.push(barFill)
+    }
+
+    // Rarity legend
+    const legendY = barY + 20
+    const rarityColors = {
+      common: { color: 0x9CA3AF, label: 'C' },
+      rare: { color: 0x3B82F6, label: 'R' },
+      epic: { color: 0xA855F7, label: 'E' },
+      legendary: { color: 0xFBBF24, label: 'L' }
+    }
+
+    let legendX = 25
+    Object.entries(rarityColors).forEach(([rarity, config]) => {
+      const count = achievements.filter(a => a.rarity === rarity && a.unlocked).length
+      const total = achievements.filter(a => a.rarity === rarity).length
+
+      const dot = this.add.circle(legendX, legendY, 6, config.color)
+        .setDepth(DEPTH.PANEL_CONTENT)
+      this.contentItems.push(dot)
+
+      const label = this.add.text(legendX + 12, legendY, `${count}/${total}`, {
+        ...getTextStyle('xs', COLORS.text.muted, 'terminal')
+      }).setOrigin(0, 0.5).setDepth(DEPTH.PANEL_CONTENT)
+      this.contentItems.push(label)
+
+      legendX += 60
+    })
+
+    // Achievement list (scrollable area)
+    const listY = legendY + 25
+    const cardHeight = 58
+    const cardSpacing = 6
+    const maxVisible = Math.floor((height - listY - 70) / (cardHeight + cardSpacing))
+
+    // Sort: unlocked first, then by rarity (legendary > epic > rare > common), then new first
+    const rarityOrder = { legendary: 0, epic: 1, rare: 2, common: 3 }
+    const sortedAchievements = [...achievements].sort((a, b) => {
+      // Unlocked first
+      if (a.unlocked && !b.unlocked) return -1
+      if (!a.unlocked && b.unlocked) return 1
+      // New achievements first (among unlocked)
+      if (a.unlocked && b.unlocked) {
+        if (a.isNew && !b.isNew) return -1
+        if (!a.isNew && b.isNew) return 1
+      }
+      // Then by rarity
+      return rarityOrder[a.rarity] - rarityOrder[b.rarity]
+    })
+
+    sortedAchievements.slice(0, maxVisible).forEach((ach, index) => {
+      const y = listY + index * (cardHeight + cardSpacing)
+      this.createAchievementCard(ach, y, cardHeight)
+    })
+
+    // View all button if more achievements exist
+    if (achievements.length > maxVisible) {
+      const moreCount = achievements.length - maxVisible
+      const btnY = height - 60
+      this.createActionButton(width / 2, btnY, `View All (${moreCount} more)`, 0xA855F7, () => {
+        this.openFullScene('AchievementsScene')
+      })
+    }
+  }
+
+  createAchievementCard(ach, y, cardHeight) {
+    const { width } = this.cameras.main
+    const rarityColors = {
+      common: 0x9CA3AF,
+      rare: 0x3B82F6,
+      epic: 0xA855F7,
+      legendary: 0xFBBF24
+    }
+    const borderColor = rarityColors[ach.rarity] || 0x666666
+
+    // Card background
+    const card = this.add.rectangle(width / 2, y + cardHeight / 2, width - 30, cardHeight - 4,
+      ach.unlocked ? COLORS.bg.panel : COLORS.bg.void, ach.unlocked ? 0.95 : 0.6)
+      .setStrokeStyle(ach.unlocked ? 2 : 1, borderColor, ach.unlocked ? 0.8 : 0.3)
+      .setDepth(DEPTH.CONTENT_BASE)
+    this.contentItems.push(card)
+
+    // NEW badge for recently unlocked
+    if (ach.isNew && ach.unlocked) {
+      const newBadge = this.add.rectangle(width - 55, y + 12, 36, 16, 0xEF4444, 0.9)
+        .setDepth(DEPTH.LIST_ITEMS)
+      this.contentItems.push(newBadge)
+
+      const newText = this.add.text(width - 55, y + 12, 'NEW', {
+        ...getTextStyle('xs', COLORS.text.primary, 'terminal'),
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(DEPTH.BUTTONS)
+      this.contentItems.push(newText)
+    }
+
+    // Icon
+    const iconText = this.add.text(35, y + cardHeight / 2 - 5, ach.icon || '🏆', {
+      fontSize: '22px'
+    }).setOrigin(0.5).setDepth(DEPTH.PANEL_CONTENT)
+      .setAlpha(ach.unlocked ? 1 : 0.4)
+    this.contentItems.push(iconText)
+
+    // Name
+    const nameText = this.add.text(60, y + 12, ach.name, {
+      ...getTextStyle('sm', ach.unlocked ? COLORS.text.primary : COLORS.text.muted, 'terminal'),
+      fontStyle: 'bold'
+    }).setDepth(DEPTH.PANEL_CONTENT)
+    this.contentItems.push(nameText)
+
+    // Description
+    const descText = this.add.text(60, y + 28, ach.description.substring(0, 35) + (ach.description.length > 35 ? '...' : ''), {
+      ...getTextStyle('xs', COLORS.text.muted, 'terminal')
+    }).setDepth(DEPTH.PANEL_CONTENT)
+    this.contentItems.push(descText)
+
+    // Reward or locked status
+    if (ach.unlocked) {
+      const rewardText = this.add.text(60, y + 44, `+${formatMoney(ach.reward)} earned`, {
+        ...getTextStyle('xs', 0x22C55E, 'terminal')
+      }).setDepth(DEPTH.PANEL_CONTENT)
+      this.contentItems.push(rewardText)
+    } else {
+      const lockedText = this.add.text(width - 40, y + cardHeight / 2, '🔒', {
+        fontSize: '18px'
+      }).setOrigin(0.5).setDepth(DEPTH.PANEL_CONTENT).setAlpha(0.5)
+      this.contentItems.push(lockedText)
+
+      // Show potential reward
+      const potentialText = this.add.text(60, y + 44, `Reward: ${formatMoney(ach.reward)}`, {
+        ...getTextStyle('xs', COLORS.text.muted, 'terminal')
+      }).setDepth(DEPTH.PANEL_CONTENT)
+      this.contentItems.push(potentialText)
+    }
+
+    // Rarity indicator
+    const rarityDot = this.add.circle(width - 25, y + cardHeight - 12, 5, borderColor, ach.unlocked ? 1 : 0.4)
+      .setDepth(DEPTH.PANEL_CONTENT)
+    this.contentItems.push(rarityDot)
   }
 
   renderLegalContent(startY) {

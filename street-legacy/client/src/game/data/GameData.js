@@ -428,13 +428,108 @@ export function checkLocalAchievements(player) {
   // Add newly unlocked to player achievements and award rewards
   if (newlyUnlocked.length > 0) {
     player.achievements = [...unlocked, ...newlyUnlocked.map(a => a.id)]
+
+    // Track unlock timestamps for "new" badge logic
+    player.achievementUnlockTimes = player.achievementUnlockTimes || {}
+    const now = Date.now()
     newlyUnlocked.forEach(a => {
       player.cash = (player.cash || 0) + (a.reward || 0)
+      player.achievementUnlockTimes[a.id] = now
     })
+
     savePlayerData(player)
   }
 
   return newlyUnlocked
+}
+
+/**
+ * Get count of achievements unlocked since last System menu visit
+ * @param {Object} player - Player data
+ * @returns {number} Count of new achievements
+ */
+export function getNewAchievementsCount(player) {
+  if (!player) return 0
+
+  const lastVisit = player.lastSystemVisit || 0
+  const achievementTimes = player.achievementUnlockTimes || {}
+
+  let newCount = 0
+  const unlockedAchievements = player.achievements || []
+
+  unlockedAchievements.forEach(achId => {
+    const unlockTime = achievementTimes[achId] || 0
+    if (unlockTime > lastVisit) {
+      newCount++
+    }
+  })
+
+  // If no unlock times tracked yet but has achievements, show count for first time
+  if (Object.keys(achievementTimes).length === 0 && unlockedAchievements.length > 0 && lastVisit === 0) {
+    return Math.min(3, unlockedAchievements.length) // Cap at 3 for first visit
+  }
+
+  return newCount
+}
+
+/**
+ * Mark System menu as visited (clears "new" badge)
+ * @param {Object} player - Player data
+ * @returns {Object} Updated player data
+ */
+export function markSystemVisited(player) {
+  if (!player) return player
+
+  player.lastSystemVisit = Date.now()
+  savePlayerData(player)
+  return player
+}
+
+/**
+ * Get all achievements with unlock status
+ * @param {Object} player - Player data
+ * @returns {Array} Achievements with status info
+ */
+export function getAllAchievementsWithStatus(player) {
+  const unlockedIds = player?.achievements || []
+  const unlockTimes = player?.achievementUnlockTimes || {}
+  const lastVisit = player?.lastSystemVisit || 0
+
+  return ACHIEVEMENTS.map(ach => ({
+    ...ach,
+    unlocked: unlockedIds.includes(ach.id),
+    unlockedAt: unlockTimes[ach.id] || null,
+    isNew: unlockTimes[ach.id] > lastVisit,
+    rarity: getAchievementRarity(ach)
+  }))
+}
+
+/**
+ * Determine achievement rarity based on difficulty
+ * @param {Object} achievement
+ * @returns {string} 'common' | 'rare' | 'epic' | 'legendary'
+ */
+function getAchievementRarity(achievement) {
+  // Legendary achievements
+  if (achievement.id.includes('100k') || achievement.id.includes('level_20') ||
+      achievement.id.includes('streak_25') || achievement.id.includes('perfect_50') ||
+      achievement.id.includes('legendary') || achievement.id.includes('big_one')) {
+    return 'legendary'
+  }
+  // Epic achievements
+  if (achievement.id.includes('50k') || achievement.id.includes('level_10') ||
+      achievement.id.includes('streak_10') || achievement.id.includes('perfect_25') ||
+      achievement.id.includes('heist') || achievement.id.includes('fixer')) {
+    return 'epic'
+  }
+  // Rare achievements
+  if (achievement.id.includes('10k') || achievement.id.includes('level_5') ||
+      achievement.id.includes('streak_5') || achievement.id.includes('perfect_10') ||
+      achievement.id.includes('_100')) {
+    return 'rare'
+  }
+  // Common achievements
+  return 'common'
 }
 
 // ============================================

@@ -6,7 +6,7 @@ import { notificationManager } from '../managers/NotificationManager'
 import { audioManager, AUDIO_KEYS } from '../managers/AudioManager'
 import { tutorialManager } from '../managers/TutorialManager'
 import { adminManager } from '../managers/AdminManager'
-import { checkWorldEvents, getActiveEventEffects, initializePlayerState, decayDistrictHeat, savePlayerData } from '../data/GameData.js'
+import { checkWorldEvents, getActiveEventEffects, initializePlayerState, decayDistrictHeat, savePlayerData, getNewAchievementsCount } from '../data/GameData.js'
 
 // Network Theme imports
 import {
@@ -968,7 +968,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   getSystemStats() {
-    return '3 new'
+    const player = gameManager.player || {}
+    const newCount = getNewAchievementsCount(player)
+    if (newCount > 0) {
+      return `${newCount} new`
+    }
+    return `Lv ${player.level || 1}`
   }
 
   getHourlyIncome() {
