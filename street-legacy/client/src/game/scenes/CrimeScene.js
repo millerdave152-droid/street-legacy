@@ -1454,22 +1454,67 @@ export class CrimeScene extends Phaser.Scene {
     const eventEffects = getActiveEventEffects(player)
 
     // Calculate success with crew bonuses + time modifier + district effects + world events
+    // Track breakdown for explanation display
+    const breakdown = {
+      baseRate: baseSuccessRate,
+      factors: []
+    }
+
     let successRate = timeAdjusted.adjustedSuccess
+
+    // Time modifier
+    const timeDiff = timeAdjusted.adjustedSuccess - baseSuccessRate
+    if (timeDiff !== 0) {
+      breakdown.factors.push({
+        name: `${timeAdjusted.periodIcon} ${timeAdjusted.periodName}`,
+        value: timeDiff,
+        type: timeDiff > 0 ? 'bonus' : 'penalty'
+      })
+    }
+
+    // Crew bonuses
     if (this.crewBonuses) {
-      if (this.crewBonuses.violence > 0) successRate += this.crewBonuses.violence
+      if (this.crewBonuses.violence > 0) {
+        successRate += this.crewBonuses.violence
+        breakdown.factors.push({
+          name: 'Crew Violence Bonus',
+          value: this.crewBonuses.violence,
+          type: 'bonus'
+        })
+      }
     }
-    // Apply district penalty if heat is high in this district
+
+    // District penalty
     if (districtEffects.crimeSuccessPenalty > 0) {
+      const penalty = Math.floor(successRate * districtEffects.crimeSuccessPenalty)
       successRate *= (1 - districtEffects.crimeSuccessPenalty)
+      breakdown.factors.push({
+        name: 'High District Heat',
+        value: -penalty,
+        type: 'penalty'
+      })
     }
-    // Apply world event success modifier
+
+    // World event modifier
     if (eventEffects.crimeSuccess) {
+      const eventBonus = Math.floor(successRate * eventEffects.crimeSuccess)
       successRate *= (1 + eventEffects.crimeSuccess)
+      breakdown.factors.push({
+        name: 'World Event',
+        value: eventBonus,
+        type: eventBonus > 0 ? 'bonus' : 'penalty'
+      })
     }
-    successRate = Math.min(95, successRate)
+
+    breakdown.finalRate = Math.min(95, successRate)
+    successRate = breakdown.finalRate
 
     const roll = Math.random() * 100
     const success = roll < successRate
+
+    // Store roll info for explanation
+    breakdown.roll = Math.floor(roll)
+    breakdown.needed = Math.floor(successRate)
 
     let result = {
       success,
@@ -1480,7 +1525,8 @@ export class CrimeScene extends Phaser.Scene {
       jailed: false,
       message: '',
       timeOfDay: timeAdjusted.periodName,
-      timeIcon: timeAdjusted.periodIcon
+      timeIcon: timeAdjusted.periodIcon,
+      breakdown  // Add breakdown to result
     }
 
     if (success) {
@@ -1915,6 +1961,38 @@ export class CrimeScene extends Phaser.Scene {
       color: '#ffffff',
       align: 'center'
     }).setOrigin(0.5).setDepth(RESULT_DEPTH + 1)
+
+    // Show breakdown explanation panel
+    if (result.breakdown) {
+      const bd = result.breakdown
+      let breakdownText = ''
+
+      // Build explanation based on factors
+      if (bd.factors && bd.factors.length > 0) {
+        const bonuses = bd.factors.filter(f => f.type === 'bonus')
+        const penalties = bd.factors.filter(f => f.type === 'penalty')
+
+        if (success && bonuses.length > 0) {
+          breakdownText = bonuses.map(f => `+${f.value}% ${f.name}`).join(', ')
+        } else if (!success) {
+          // Show what worked against them
+          if (penalties.length > 0) {
+            breakdownText = penalties.map(f => `${f.value}% ${f.name}`).join(', ')
+          }
+          // Show the roll info
+          breakdownText += `\nRolled ${bd.roll} (needed <${bd.needed})`
+        }
+      }
+
+      if (breakdownText) {
+        this.add.text(width / 2, height / 2 + 65, breakdownText, {
+          fontSize: '11px',
+          color: success ? '#a7f3d0' : '#fca5a5',
+          align: 'center',
+          fontStyle: 'italic'
+        }).setOrigin(0.5).setDepth(RESULT_DEPTH + 1)
+      }
+    }
 
     // Continue button
     const continueBtn = this.add.rectangle(width / 2, height / 2 + 100, 150, 40, jailed ? 0x3b82f6 : 0x333333)
