@@ -26,6 +26,7 @@ import Phaser from 'phaser'
 import { audioManager } from '../managers/AudioManager'
 import { notificationManager } from '../managers/NotificationManager'
 import { networkTransition } from '../ui/NetworkTransition'
+import { DEPTH, getTerminalStyle } from '../ui/NetworkTheme'
 
 export class BaseScene extends Phaser.Scene {
   constructor(key) {
@@ -330,24 +331,26 @@ export class BaseScene extends Phaser.Scene {
    * @returns {Phaser.GameObjects.Container}
    */
   createBackButton(onClick = null) {
-    const btn = this.add.container(40, 50)
+    const btn = this.add.container(20, 20).setDepth(DEPTH.CLOSE_BUTTON)
 
-    const bg = this.add.circle(0, 0, 24, 0x333333)
+    // Semi-transparent background pill
+    const bg = this.add.rectangle(40, 0, 90, 32, 0x000000, 0.5)
       .setInteractive({ useHandCursor: true })
 
-    const icon = this.add.text(0, 0, '←', {
-      fontSize: '24px',
-      color: '#ffffff'
+    // Terminal-style text: "← BACK"
+    const label = this.add.text(40, 0, '← BACK', {
+      ...getTerminalStyle('sm'),
+      fontStyle: 'bold'
     }).setOrigin(0.5)
 
-    btn.add([bg, icon])
+    btn.add([bg, label])
 
     bg.on('pointerover', () => {
-      bg.setFillStyle(0x444444)
+      bg.setFillStyle(0xff0000, 0.3)
       audioManager.playHover()
     })
 
-    bg.on('pointerout', () => bg.setFillStyle(0x333333))
+    bg.on('pointerout', () => bg.setFillStyle(0x000000, 0.5))
 
     bg.on('pointerdown', () => {
       audioManager.playClick()
@@ -367,7 +370,7 @@ export class BaseScene extends Phaser.Scene {
    * @returns {Phaser.GameObjects.Container}
    */
   createCloseButton(onClick) {
-    const btn = this.add.container(this.width - 40, 50)
+    const btn = this.add.container(this.width - 40, 50).setDepth(DEPTH.CLOSE_BUTTON)
 
     const bg = this.add.circle(0, 0, 24, 0x333333)
       .setInteractive({ useHandCursor: true })
