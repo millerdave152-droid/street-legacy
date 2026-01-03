@@ -378,7 +378,7 @@ export class UIScene extends Phaser.Scene {
           audioManager.playClick()
           if (btn.action === 'settings') {
             this.scene.pause('GameScene')
-            this.scene.launch('AudioSettingsScene')
+            this.scene.launch('SettingsScene')
           } else {
             this.scene.pause('GameScene')
             this.scene.launch(btn.action)
