@@ -241,11 +241,17 @@ export class MiniGameResult extends Phaser.Scene {
     // Title with dramatic reveal
     this.createTitle(centerX)
 
+    // Result explanation message (between title and stats)
+    this.createResultMessage(centerX)
+
     // Stats panel with rolling counters
     this.createStatsPanel(centerX, width, height)
 
     // Achievement notification area
     this.createAchievementDisplay(centerX, height)
+
+    // Contextual tip (before continue button)
+    this.createTipDisplay(centerX, height, width)
 
     // Continue button with glow
     this.createContinueButton(centerX, height, width)
@@ -315,6 +321,180 @@ export class MiniGameResult extends Phaser.Scene {
       return this.result.score > previousHigh
     } catch (e) {
       return false
+    }
+  }
+
+  /**
+   * Get result explanation message based on performance
+   * @returns {{ icon: string, text: string, color: number }}
+   */
+  getResultMessage() {
+    const tier = this.performanceTier
+    const result = this.result
+
+    if (result.success) {
+      // Success messages based on quality
+      if (tier.name === 'PERFECT' || result.perfectRun) {
+        return {
+          icon: '💯',
+          text: 'FLAWLESS! Maximum reward earned.',
+          color: 0x00ff00
+        }
+      } else if (tier.name === 'GOLD') {
+        return {
+          icon: '✓',
+          text: 'CLEAN GETAWAY - Full payout secured.',
+          color: 0x00ff00
+        }
+      } else if (tier.name === 'SILVER') {
+        return {
+          icon: '✓',
+          text: 'SOLID EXECUTION - Good work out there.',
+          color: 0x00dd00
+        }
+      } else {
+        // BRONZE - risky success
+        return {
+          icon: '⚠️',
+          text: 'CLOSE CALL - Barely made it out.',
+          color: 0xffff00
+        }
+      }
+    } else {
+      // Failure messages - check various reasons
+      const failureReason = result.failureReason || this.gameData?.failureReason
+
+      if (failureReason === 'timing' || failureReason === 'cursor_left') {
+        return {
+          icon: '❌',
+          text: 'CURSOR LEFT SAFE ZONE - Target noticed you!',
+          color: 0xffff00
+        }
+      } else if (failureReason === 'heat') {
+        return {
+          icon: '🔥',
+          text: 'TOO HOT - Heat level attracted attention.',
+          color: 0xffff00
+        }
+      } else if (failureReason === 'energy') {
+        return {
+          icon: '⚡',
+          text: 'LOW ENERGY - Performance suffered.',
+          color: 0xffff00
+        }
+      } else if (failureReason === 'difficulty') {
+        return {
+          icon: '📈',
+          text: 'OUTMATCHED - Try easier targets first.',
+          color: 0xffff00
+        }
+      } else if (result.timeRemaining <= 0) {
+        return {
+          icon: '⏱️',
+          text: 'TIME RAN OUT - Too slow on the execution.',
+          color: 0xffff00
+        }
+      } else if (result.score < 30) {
+        return {
+          icon: '🎲',
+          text: 'UNLUCKY ROLL - Sometimes fate decides.',
+          color: 0xffff00
+        }
+      } else {
+        return {
+          icon: '❌',
+          text: 'MISSION FAILED - Better luck next time.',
+          color: 0xffff00
+        }
+      }
+    }
+  }
+
+  /**
+   * Get contextual gameplay tip based on player state
+   * @returns {{ icon: string, text: string } | null}
+   */
+  getContextualTip() {
+    try {
+      const player = gameManager.getPlayer()
+      if (!player) return null
+
+      const tips = []
+
+      // Check recent failures
+      const recentFailures = player.stats?.recent_failures || 0
+      if (recentFailures >= 3) {
+        tips.push({
+          icon: '💡',
+          text: 'TIP: Try lower-risk crimes to rebuild momentum.'
+        })
+      }
+
+      // Check heat level
+      const heat = player.heat || 0
+      if (heat >= 75) {
+        tips.push({
+          icon: '🔥',
+          text: 'TIP: Your heat is critical! Lay low or visit the safehouse.'
+        })
+      } else if (heat >= 50) {
+        tips.push({
+          icon: '⚠️',
+          text: 'TIP: Heat is rising. Consider cooling off before your next job.'
+        })
+      }
+
+      // Check energy level
+      const energy = player.energy || 100
+      if (energy < 30) {
+        tips.push({
+          icon: '⚡',
+          text: 'TIP: Low energy hurts performance. Rest or use energy items.'
+        })
+      }
+
+      // Check if player lost streak
+      if (!this.result.success && this.streakCount > 0) {
+        tips.push({
+          icon: '🔄',
+          text: `TIP: You lost a ${this.streakCount} win streak. Start building a new one!`
+        })
+      }
+
+      // Success-based tips
+      if (this.result.success) {
+        // Crew tip for solo players
+        const crewCount = player.crew?.length || 0
+        if (crewCount === 0 && player.cash >= 2000) {
+          tips.push({
+            icon: '👥',
+            text: 'TIP: Hire crew members from the Network to boost success rates.'
+          })
+        }
+
+        // Streak tip
+        if (this.streakCount >= 5 && this.streakCount < 10) {
+          tips.push({
+            icon: '🔥',
+            text: 'TIP: Keep the streak alive! 10+ wins unlocks bigger bonuses.'
+          })
+        }
+
+        // Perfect run tip
+        if (this.performanceTier.name === 'BRONZE') {
+          tips.push({
+            icon: '⭐',
+            text: 'TIP: Aim for higher scores to earn GOLD or PERFECT tier rewards.'
+          })
+        }
+      }
+
+      // Return random tip from collected tips (or null if none)
+      if (tips.length === 0) return null
+      return tips[Math.floor(Math.random() * tips.length)]
+    } catch (e) {
+      console.warn('[MiniGameResult] getContextualTip error:', e)
+      return null
     }
   }
 
@@ -681,6 +861,73 @@ export class MiniGameResult extends Phaser.Scene {
       y: 260,
       duration: 300,
       delay: 500
+    })
+  }
+
+  /**
+   * Create result explanation message display
+   */
+  createResultMessage(centerX) {
+    const message = this.getResultMessage()
+    const messageY = 290
+
+    // Message background
+    const msgBg = this.add.rectangle(centerX, messageY, 320, 28, 0x000000, 0.5)
+      .setStrokeStyle(1, message.color, 0.4)
+      .setDepth(30)
+
+    // Message text
+    const msgText = this.add.text(centerX, messageY, `${message.icon} ${message.text}`, {
+      fontFamily: '"JetBrains Mono", monospace',
+      fontSize: '12px',
+      color: toHexString(message.color),
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(31)
+
+    // Fade in animation
+    msgBg.setAlpha(0)
+    msgText.setAlpha(0)
+
+    this.tweens.add({
+      targets: [msgBg, msgText],
+      alpha: 1,
+      duration: 400,
+      delay: 600,
+      ease: 'Quad.out'
+    })
+  }
+
+  /**
+   * Create contextual tip display
+   */
+  createTipDisplay(centerX, height, width) {
+    const tip = this.getContextualTip()
+    if (!tip) return
+
+    const tipY = height - 105
+
+    // Tip background
+    const tipBg = this.add.rectangle(centerX, tipY, Math.min(340, width - 40), 32, 0x1a1a2e, 0.9)
+      .setStrokeStyle(1, COLORS.text.muted, 0.3)
+      .setDepth(75)
+
+    // Tip text
+    const tipText = this.add.text(centerX, tipY, `${tip.icon} ${tip.text}`, {
+      ...getTerminalStyle('xs'),
+      color: toHexString(COLORS.text.secondary),
+      wordWrap: { width: Math.min(320, width - 60) }
+    }).setOrigin(0.5).setDepth(76)
+
+    // Subtle fade in
+    tipBg.setAlpha(0)
+    tipText.setAlpha(0)
+
+    this.tweens.add({
+      targets: [tipBg, tipText],
+      alpha: 1,
+      duration: 500,
+      delay: 1200,
+      ease: 'Quad.out'
     })
   }
 
