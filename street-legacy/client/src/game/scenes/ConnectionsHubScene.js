@@ -424,7 +424,13 @@ export class ConnectionsHubScene extends BaseScene {
     })
     card.on('pointerdown', () => {
       audioManager.playClick()
-      this.openFullScene('CrewScene', { tab: 'crew' })
+      if (isHired) {
+        // Already hired - go to crew management
+        this.openFullScene('CrewScene', { tab: 'crew' })
+      } else {
+        // Available for hire - show quick-hire modal
+        this.showHireConfirmation(member)
+      }
     })
 
     // Left accent
@@ -797,8 +803,208 @@ export class ConnectionsHubScene extends BaseScene {
     console.log('[ConnectionsHubScene] Scene stopped')
   }
 
+  // =====================================================
+  // Quick-Hire Modal System
+  // =====================================================
+
+  showHireConfirmation(member) {
+    const { width, height } = this.cameras.main
+    this.hireModalElements = []
+    const roleConfig = ROLE_CONFIG[member.role] || { icon: '[?]', color: 0x6b7280 }
+    const player = gameManager.player || getPlayerData()
+    const canAfford = (player.cash || 0) >= member.hire_cost
+
+    // Overlay
+    const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.9)
+      .setOrigin(0)
+      .setInteractive()
+      .setDepth(DEPTH.MODAL_BACKDROP)
+    this.hireModalElements.push(overlay)
+
+    // Modal
+    const modal = this.add.rectangle(width / 2, height / 2, 280, 200, COLORS.bg.panel, 0.98)
+      .setStrokeStyle(2, canAfford ? 0x22c55e : 0xef4444)
+      .setDepth(DEPTH.MODAL_CONTENT)
+    this.hireModalElements.push(modal)
+
+    // Title
+    const title = this.add.text(width / 2, height / 2 - 75, 'Hire Crew Member?', {
+      ...getTerminalStyle('md'),
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(title)
+
+    // Member info with role icon
+    const memberInfo = this.add.text(width / 2, height / 2 - 45, `${roleConfig.icon} ${member.name}`, {
+      ...getTerminalStyle('md'),
+      color: toHexString(roleConfig.color)
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(memberInfo)
+
+    // Role and bonus
+    const roleInfo = this.add.text(width / 2, height / 2 - 22, `${member.role.toUpperCase()} • ${member.bonus}`, {
+      ...getTerminalStyle('xs'),
+      color: toHexString(COLORS.text.muted)
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(roleInfo)
+
+    // Hire cost
+    const hireCost = this.add.text(width / 2, height / 2 + 5, `Hire: ${formatMoney(member.hire_cost)}`, {
+      ...getTerminalStyle('sm'),
+      color: canAfford ? '#22c55e' : '#ef4444'
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(hireCost)
+
+    // Daily cost
+    const dailyCost = this.add.text(width / 2, height / 2 + 25, `Daily: ${formatMoney(member.daily_cost)}`, {
+      ...getTerminalStyle('xs'),
+      color: '#f59e0b'
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(dailyCost)
+
+    // Player cash display
+    const cashInfo = this.add.text(width / 2, height / 2 + 45, `Your Cash: ${formatMoney(player.cash || 0)}`, {
+      ...getTerminalStyle('xs'),
+      color: toHexString(COLORS.text.muted)
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(cashInfo)
+
+    // Buttons
+    const btnY = height / 2 + 75
+
+    // Cancel button
+    const cancelBtn = this.add.rectangle(width / 2 - 65, btnY, 100, 32, 0x444444)
+      .setInteractive({ useHandCursor: true }).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(cancelBtn)
+
+    cancelBtn.on('pointerover', () => cancelBtn.setFillStyle(0x555555))
+    cancelBtn.on('pointerout', () => cancelBtn.setFillStyle(0x444444))
+    cancelBtn.on('pointerdown', () => {
+      audioManager.playClick()
+      this.closeHireModal()
+    })
+
+    const cancelText = this.add.text(width / 2 - 65, btnY, 'Cancel', {
+      ...getTerminalStyle('sm')
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 2)
+    this.hireModalElements.push(cancelText)
+
+    // Hire button (disabled if can't afford)
+    const hireBtn = this.add.rectangle(width / 2 + 65, btnY, 100, 32, canAfford ? 0x22c55e : 0x666666)
+      .setInteractive({ useHandCursor: canAfford }).setDepth(DEPTH.MODAL_CONTENT + 1)
+    this.hireModalElements.push(hireBtn)
+
+    if (canAfford) {
+      hireBtn.on('pointerover', () => hireBtn.setFillStyle(0x16a34a))
+      hireBtn.on('pointerout', () => hireBtn.setFillStyle(0x22c55e))
+      hireBtn.on('pointerdown', () => {
+        audioManager.playClick()
+        this.closeHireModal()
+        this.hireMember(member)
+      })
+    }
+
+    const hireText = this.add.text(width / 2 + 65, btnY, canAfford ? 'Hire' : 'No Cash', {
+      ...getTerminalStyle('sm'),
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(DEPTH.MODAL_CONTENT + 2)
+    this.hireModalElements.push(hireText)
+  }
+
+  closeHireModal() {
+    if (this.hireModalElements) {
+      this.hireModalElements.forEach(el => el.destroy())
+      this.hireModalElements = []
+    }
+  }
+
+  hireMember(member) {
+    try {
+      const player = gameManager.player || getPlayerData()
+
+      if ((player.cash || 0) < member.hire_cost) {
+        this.showToast('Not enough cash!', false)
+        return
+      }
+
+      // Check crew capacity (max 4)
+      const currentCrew = player.crew || []
+      if (currentCrew.length >= 4) {
+        this.showToast('Crew is full! Fire someone first.', false)
+        return
+      }
+
+      // Deduct hire cost
+      player.cash -= member.hire_cost
+
+      // Add to player's crew
+      if (!player.crew) player.crew = []
+      const hiredMember = {
+        ...member,
+        loyalty: 100,
+        hired_at: new Date().toISOString()
+      }
+      player.crew.push(hiredMember)
+
+      // Save to localStorage
+      savePlayerData(player)
+      gameManager.player = player
+
+      // Play success sound and show toast
+      this.showToast(`Hired ${member.name}!`, true)
+      audioManager.playClick()
+
+      // Refresh the crew display
+      this.renderContent()
+    } catch (error) {
+      console.error('[ConnectionsHubScene] Hire failed:', error)
+      this.showToast(error.message || 'Hire failed', false)
+    }
+  }
+
+  showToast(message, isSuccess = true) {
+    const { width } = this.cameras.main
+
+    const toastBg = this.add.rectangle(width / 2, 180, 240, 36, isSuccess ? 0x22c55e : 0xef4444, 0.95)
+      .setDepth(DEPTH.TOAST)
+    const toastText = this.add.text(width / 2, 180, message, {
+      ...getTerminalStyle('sm'),
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(DEPTH.TOAST + 1)
+
+    // Animate in
+    toastBg.setAlpha(0).setY(160)
+    toastText.setAlpha(0).setY(160)
+
+    this.tweens.add({
+      targets: [toastBg, toastText],
+      alpha: 1,
+      y: 180,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        // Auto-dismiss after 2 seconds
+        this.time.delayedCall(2000, () => {
+          this.tweens.add({
+            targets: [toastBg, toastText],
+            alpha: 0,
+            y: 160,
+            duration: 200,
+            onComplete: () => {
+              toastBg.destroy()
+              toastText.destroy()
+            }
+          })
+        })
+      }
+    })
+  }
+
   shutdown() {
     console.log('[ConnectionsHubScene] shutdown() called')
+
+    // Clean up hire modal if open
+    this.closeHireModal()
 
     // Safety net: always try to resume UIScene on shutdown
     try {

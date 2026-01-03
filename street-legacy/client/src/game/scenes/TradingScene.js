@@ -48,13 +48,13 @@ export class TradingScene extends Phaser.Scene {
     // Header
     this.add.text(width / 2, 40, '[T] TRADING', {
       ...getTerminalStyle('xxl'),
-    }).setOrigin(0.5)
+    }).setOrigin(0.5).setDepth(DEPTH.PANEL_CONTENT)
 
     // Subtitle
     this.add.text(width / 2, 75, `${SYMBOLS.system} Buy low, sell high - manage your inventory`, {
       fontSize: '14px',
       color: toHexString(COLORS.text.secondary)
-    }).setOrigin(0.5)
+    }).setOrigin(0.5).setDepth(DEPTH.PANEL_CONTENT)
 
     // Close button
     this.createCloseButton()
@@ -222,11 +222,12 @@ export class TradingScene extends Phaser.Scene {
       const bg = this.add.rectangle(x, tabY, tabWidth - 10, 35,
         isActive ? COLORS.status.info : COLORS.bg.elevated)
         .setInteractive({ useHandCursor: true })
+        .setDepth(DEPTH.PANEL_CONTENT)
 
       const label = this.add.text(x, tabY, tab.label, {
         fontSize: '14px',
         color: isActive ? toHexString(COLORS.bg.void) : toHexString(COLORS.text.primary)
-      }).setOrigin(0.5)
+      }).setOrigin(0.5).setDepth(DEPTH.PANEL_CONTENT + 1)
 
       bg.on('pointerdown', () => {
         this.currentTab = tab.key
@@ -251,7 +252,7 @@ export class TradingScene extends Phaser.Scene {
     if (this.contentContainer) {
       this.contentContainer.destroy()
     }
-    this.contentContainer = this.add.container(0, 0)
+    this.contentContainer = this.add.container(0, 0).setDepth(DEPTH.PANEL_CONTENT)
 
     // Show cash
     const player = gameManager.player || getPlayerData()

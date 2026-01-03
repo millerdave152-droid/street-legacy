@@ -147,11 +147,11 @@ export const TRADING_GOODS = [
 
 // NPC Crew members for local mode
 export const CREW_MEMBERS = [
-  { id: 'marcus', name: 'Marcus', role: 'driver', skill: 'Getaway Expert', bonus: '+20% escape chance', cost: 2000, cut: 15, min_level: 5 },
-  { id: 'luna', name: 'Luna', role: 'hacker', skill: 'Security Bypass', bonus: '+15% success rate', cost: 5000, cut: 20, min_level: 10 },
-  { id: 'tony', name: 'Big Tony', role: 'muscle', skill: 'Intimidation', bonus: '+25% intimidation', cost: 3000, cut: 15, min_level: 7 },
-  { id: 'slim', name: 'Slim', role: 'locksmith', skill: 'Safe Cracker', bonus: '+20% vault bonus', cost: 4000, cut: 18, min_level: 8 },
-  { id: 'jenny', name: 'Jenny', role: 'insider', skill: 'Intel Gathering', bonus: '-15% heat', cost: 6000, cut: 22, min_level: 12 },
+  { id: 'marcus', name: 'Marcus', role: 'driver', skill: 'Getaway Expert', bonus: '+20% escape chance', cost: 2000, hire_cost: 2000, daily_cost: 100, cut: 15, min_level: 5 },
+  { id: 'luna', name: 'Luna', role: 'hacker', skill: 'Security Bypass', bonus: '+15% success rate', cost: 5000, hire_cost: 5000, daily_cost: 200, cut: 20, min_level: 10 },
+  { id: 'tony', name: 'Big Tony', role: 'muscle', skill: 'Intimidation', bonus: '+25% intimidation', cost: 3000, hire_cost: 3000, daily_cost: 150, cut: 15, min_level: 7 },
+  { id: 'slim', name: 'Slim', role: 'locksmith', skill: 'Safe Cracker', bonus: '+20% vault bonus', cost: 4000, hire_cost: 4000, daily_cost: 175, cut: 18, min_level: 8 },
+  { id: 'jenny', name: 'Jenny', role: 'insider', skill: 'Intel Gathering', bonus: '-15% heat', cost: 6000, hire_cost: 6000, daily_cost: 250, cut: 22, min_level: 12 },
 ]
 
 // Achievements for local mode
