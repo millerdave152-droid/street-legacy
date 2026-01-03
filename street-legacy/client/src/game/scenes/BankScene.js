@@ -22,6 +22,19 @@ export class BankScene extends Phaser.Scene {
     this.stocks = []
     this.selectedStock = null
     this.loanAmount = ''
+    this.pendingCasinoResult = null
+  }
+
+  init(data) {
+    // Check if we're returning from a casino game with results
+    if (data?.casinoResult) {
+      console.log('[BankScene] Received casino result:', data.casinoResult)
+      this.pendingCasinoResult = data.casinoResult
+      // If returning from casino, switch to gambling tab
+      this.activeTab = 'gambling'
+    } else {
+      this.pendingCasinoResult = null
+    }
   }
 
   create() {
@@ -67,6 +80,60 @@ export class BankScene extends Phaser.Scene {
 
     // Content area
     this.contentItems = []
+    this.renderContent()
+
+    // Process pending casino result if returning from a casino game
+    if (this.pendingCasinoResult) {
+      // Delay slightly to ensure UI is ready
+      this.time.delayedCall(100, () => {
+        this.processCasinoResult(this.pendingCasinoResult)
+        this.pendingCasinoResult = null
+      })
+    }
+  }
+
+  /**
+   * Process casino result passed via scene data
+   */
+  processCasinoResult(result) {
+    console.log('[BankScene] Processing casino result:', result)
+    const player = gameManager.player || getPlayerData()
+    const { won, payout, gameType, cancelled, betAmount } = result
+
+    if (cancelled) {
+      // Refund the bet on cancel
+      player.cash += betAmount
+      savePlayerData(player)
+      gameManager.player = player
+      this.updateBalances()
+      this.renderContent()
+      return
+    }
+
+    if (won) {
+      // Add winnings to cash
+      player.cash += payout
+      savePlayerData(player)
+      gameManager.player = player
+
+      // Show win result
+      const emoji = gameType === 'coinflip' ? '🪙' : '🎲'
+      this.showGambleResult(true, `${emoji} Won ${formatMoney(payout)}!`)
+
+      try {
+        audioManager.playCashGain(payout)
+      } catch (e) { /* ignore */ }
+    } else {
+      // Bet was already deducted, just show loss
+      const emoji = gameType === 'coinflip' ? '🪙' : '🎲'
+      this.showGambleResult(false, `${emoji} Better luck next time!`)
+
+      try {
+        audioManager.playMiss()
+      } catch (e) { /* ignore */ }
+    }
+
+    this.updateBalances()
     this.renderContent()
   }
 
@@ -880,25 +947,52 @@ export class BankScene extends Phaser.Scene {
       return
     }
 
-    // Deduct bet
+    // For coinflip and dice, launch animated casino scenes
+    if (type === 'coinflip') {
+      // Deduct bet before launching
+      player.cash -= bet
+      savePlayerData(player)
+      gameManager.player = player
+      this.updateBalances()
+
+      console.log('[BankScene] Launching CoinFlipScene with bet:', bet)
+
+      // Stop BankScene and start CoinFlipScene
+      this.scene.stop()
+      this.scene.start('CoinFlipScene', {
+        betAmount: bet,
+        returnScene: 'BankScene'
+      })
+      return
+    }
+
+    if (type === 'dice') {
+      // Deduct bet before launching
+      player.cash -= bet
+      savePlayerData(player)
+      gameManager.player = player
+      this.updateBalances()
+
+      console.log('[BankScene] Launching DiceRollScene with bet:', bet)
+
+      // Stop BankScene and start DiceRollScene
+      this.scene.stop()
+      this.scene.start('DiceRollScene', {
+        betAmount: bet,
+        returnScene: 'BankScene'
+      })
+      return
+    }
+
+    // High roller remains instant (no animation)
     player.cash -= bet
 
-    // Determine outcome
     const roll = Math.random() * 100
     let won = false
     let payout = 0
     let message = ''
 
-    if (type === 'coinflip') {
-      won = roll < 50
-      payout = won ? bet * 2 : 0
-      message = won ? `🪙 HEADS! Won ${formatMoney(payout)}!` : '🪙 TAILS! Better luck next time!'
-    } else if (type === 'dice') {
-      const diceRoll = Math.floor(Math.random() * 6) + 1
-      won = diceRoll === 6
-      payout = won ? bet * 6 : 0
-      message = won ? `🎲 Rolled ${diceRoll}! Won ${formatMoney(payout)}!` : `🎲 Rolled ${diceRoll}. Try again!`
-    } else if (type === 'highroller') {
+    if (type === 'highroller') {
       won = roll < 10
       payout = won ? bet * 10 : 0
       message = won ? `💎 JACKPOT! Won ${formatMoney(payout)}!` : '💎 No luck this time!'

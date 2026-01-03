@@ -11,6 +11,7 @@ import { INTENT_TYPES } from './IntentClassifier'
 import { gameManager } from '../GameManager'
 import { aiIntelAnalyzer } from './AIIntelAnalyzer'
 import { visualFormatter } from './VisualFormatter'
+import { sessionContext } from './SessionContext'
 
 // Response templates by intent type
 const RESPONSE_TEMPLATES = {
@@ -257,6 +258,7 @@ const RESPONSE_TEMPLATES = {
 class ResponseGenerator {
   /**
    * Generate a response for the given intent and context
+   * Phase 6: Now uses context-aware template selection
    */
   generateResponse(intent, context = {}, entities = {}) {
     const templates = RESPONSE_TEMPLATES[intent]
@@ -265,19 +267,163 @@ class ResponseGenerator {
       return sarahPersonality.getUnknownResponse()
     }
 
+    // Record intent for tracking
+    sessionContext.recordIntent(intent)
+
     // Build data for template injection
     const data = this.buildResponseData(intent, context, entities)
 
-    // Select random template
-    const template = sarahPersonality.pickRandom(templates.templates)
+    // Get context modifiers
+    const modifiers = sessionContext.getResponseModifiers()
+
+    // Select template with context awareness
+    const { template, templateIndex } = this.selectContextAwareTemplate(
+      intent,
+      templates.templates,
+      modifiers,
+      context
+    )
+
+    // Record which template was used
+    sessionContext.recordTemplateUsage(intent, templateIndex)
 
     // Inject data into template
     let response = this.injectData(template, data)
+
+    // Apply context-based modifications
+    response = this.applyContextModifications(response, intent, modifiers, context)
 
     // Apply personality touches
     response = sarahPersonality.formatResponse(response)
 
     return response
+  }
+
+  /**
+   * Phase 6: Select template avoiding recently used ones
+   */
+  selectContextAwareTemplate(intent, templates, modifiers, context) {
+    // Get recently used template indices to avoid
+    const recentlyUsed = sessionContext.getRecentlyUsedTemplates(intent, 3)
+
+    // Filter out recently used templates
+    const availableIndices = templates
+      .map((_, index) => index)
+      .filter(index => !recentlyUsed.includes(index))
+
+    // If all templates were recently used, use all of them
+    const indices = availableIndices.length > 0 ? availableIndices : templates.map((_, i) => i)
+
+    // Pick random from available
+    const templateIndex = indices[Math.floor(Math.random() * indices.length)]
+
+    return {
+      template: templates[templateIndex],
+      templateIndex
+    }
+  }
+
+  /**
+   * Phase 6: Apply modifications based on conversation context
+   */
+  applyContextModifications(response, intent, modifiers, context) {
+    const { familiarity, isRepeat, interactionCount } = modifiers
+
+    // Check if this is a frustrated user
+    const normalizedQuery = context.originalQuery || ''
+    if (sessionContext.isFrustrated(normalizedQuery)) {
+      // Add a more direct, helpful response
+      response = this.addFrustrationResponse(response, intent)
+    }
+    // Check if this is a repeat question (asked before but not frustrated yet)
+    else if (sessionContext.isRepeatQuestion(normalizedQuery)) {
+      response = this.addRepeatAcknowledgment(response)
+    }
+    // Same intent as previous turn - slightly different phrasing
+    else if (isRepeat) {
+      response = this.addContinuationPrefix(response)
+    }
+
+    // Adjust verbosity based on familiarity
+    if (familiarity === 'veteran' && response.length > 300) {
+      response = this.shortenForVeteran(response)
+    } else if (familiarity === 'new' && response.length < 100) {
+      response = this.expandForNewUser(response, intent)
+    }
+
+    return response
+  }
+
+  /**
+   * Add response for frustrated users (asked same thing 3+ times)
+   */
+  addFrustrationResponse(response, intent) {
+    const prefixes = [
+      "Let me try explaining this differently. ",
+      "I hear you - let me be more direct. ",
+      "OK, straight answer: ",
+      "Let me break this down more clearly. ",
+    ]
+    return sarahPersonality.pickRandom(prefixes) + response
+  }
+
+  /**
+   * Add acknowledgment for repeat questions
+   */
+  addRepeatAcknowledgment(response) {
+    const prefixes = [
+      "As I mentioned, ",
+      "Just to reiterate: ",
+      "Again, ",
+      "To recap: ",
+    ]
+    return sarahPersonality.pickRandom(prefixes) + response
+  }
+
+  /**
+   * Add continuation prefix for same intent back-to-back
+   */
+  addContinuationPrefix(response) {
+    const prefixes = [
+      "Also, ",
+      "Adding to that, ",
+      "On a related note, ",
+      "Furthermore, ",
+    ]
+    return sarahPersonality.pickRandom(prefixes) + response
+  }
+
+  /**
+   * Shorten responses for veteran users
+   */
+  shortenForVeteran(response) {
+    // Split into lines and take key points
+    const lines = response.split('\n')
+    if (lines.length > 5) {
+      // Keep first line (main point) and last few lines (action items)
+      const shortened = [lines[0], '...', ...lines.slice(-3)]
+      return shortened.join('\n')
+    }
+    return response
+  }
+
+  /**
+   * Expand responses for new users
+   */
+  expandForNewUser(response, intent) {
+    const tipsByIntent = {
+      [INTENT_TYPES.CRIME_ADVICE]: "\n\nTip: Try 'ask help' to see what else I can help with.",
+      [INTENT_TYPES.GREETING]: "\n\nI can help with crime advice, job tips, player intel, and more. Just ask!",
+      [INTENT_TYPES.HEAT_ADVICE]: "\n\nNew here? Use 'bank' command to protect your cash from arrests.",
+    }
+    return response + (tipsByIntent[intent] || '')
+  }
+
+  /**
+   * Track question for frustration detection (call from SarahCore)
+   */
+  trackQuestion(query) {
+    return sessionContext.trackQuestion(query)
   }
 
   /**

@@ -32,6 +32,15 @@ export const OUTPUT_TYPES = {
   SARAH_CRITICAL: 'sarah_critical',   // Critical alert (red pulsing)
   SARAH_INTEL: 'sarah_intel',         // AI intel (purple)
   SARAH_THREAT: 'sarah_threat',       // Threat warning (red)
+
+  // NPC messaging output types
+  NPC_INTEL: 'npc_intel',             // Intel messages (cyan)
+  NPC_DEAL: 'npc_deal',               // Deal/trade offers (green)
+  NPC_JOB: 'npc_job',                 // Job offers (amber)
+  NPC_WARNING: 'npc_warning',         // NPC warnings (orange)
+  NPC_URGENT: 'npc_urgent',           // Urgent messages (red)
+  NPC_BETRAYAL: 'npc_betrayal',       // Betrayal events (red pulse)
+  NPC_SCAM: 'npc_scam',               // Scam messages (hidden as green)
 }
 
 class TerminalManager {
@@ -460,16 +469,25 @@ class TerminalManager {
   }
 
   /**
-   * Add output line to buffer
+   * Add output line to buffer with automatic text wrapping
+   * Long lines are pre-split to prevent rendering issues
    */
   addOutput(text, type = OUTPUT_TYPES.RESPONSE) {
-    const line = {
-      text,
-      type,
-      timestamp: Date.now()
-    }
+    const timestamp = Date.now()
 
-    this.outputBuffer.push(line)
+    // Pre-wrap long lines to avoid rendering issues
+    const wrappedLines = wrapText(text, 75)
+
+    // Add each wrapped line as a separate buffer entry
+    for (const lineText of wrappedLines) {
+      const line = {
+        text: lineText,
+        type,
+        timestamp
+      }
+
+      this.outputBuffer.push(line)
+    }
 
     // Trim if over max
     if (this.outputBuffer.length > this.maxOutputLines) {
@@ -479,7 +497,7 @@ class TerminalManager {
     // Reset scroll to bottom
     this.scrollOffset = 0
 
-    this.notifyListeners('output', { line })
+    this.notifyListeners('output', { line: { text, type, timestamp } })
     this.saveOutput()
   }
 
@@ -608,6 +626,58 @@ class TerminalManager {
     this.loadOutput()
     console.log('[TerminalManager] Initialized with', this.outputBuffer.length, 'lines,', this.commandHistory.length, 'history items')
   }
+}
+
+/**
+ * Wrap text to a maximum character width
+ * Preserves words and handles long words gracefully
+ * @param {string} text - Text to wrap
+ * @param {number} maxChars - Maximum characters per line (default 75)
+ * @returns {string[]} Array of wrapped lines
+ */
+function wrapText(text, maxChars = 75) {
+  if (!text || text.length <= maxChars) {
+    return [text]
+  }
+
+  const lines = []
+  const words = text.split(' ')
+  let currentLine = ''
+
+  for (const word of words) {
+    // Handle very long words (break them)
+    if (word.length > maxChars) {
+      // Finish current line if any
+      if (currentLine) {
+        lines.push(currentLine.trim())
+        currentLine = ''
+      }
+      // Break the long word into chunks
+      for (let i = 0; i < word.length; i += maxChars) {
+        lines.push(word.slice(i, i + maxChars))
+      }
+      continue
+    }
+
+    // Check if adding this word would exceed max
+    const testLine = currentLine ? `${currentLine} ${word}` : word
+    if (testLine.length > maxChars) {
+      // Start a new line
+      if (currentLine) {
+        lines.push(currentLine.trim())
+      }
+      currentLine = word
+    } else {
+      currentLine = testLine
+    }
+  }
+
+  // Don't forget the last line
+  if (currentLine) {
+    lines.push(currentLine.trim())
+  }
+
+  return lines.length > 0 ? lines : ['']
 }
 
 // Singleton instance

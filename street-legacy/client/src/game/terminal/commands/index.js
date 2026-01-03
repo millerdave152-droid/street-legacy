@@ -11,7 +11,14 @@ import { registerNPCCommands } from './NPCCommands'
 import { registerContactCommands } from './ContactCommands'
 import { registerReputationCommands } from './ReputationCommands'
 import { registerDefenseCommands } from './DefenseCommands'
+import { registerOpportunityCommands } from './OpportunityCommands'
 import { terminalNPCManager } from '../../managers/TerminalNPCManager'
+import { heatEventSystem } from '../../managers/HeatEventSystem'
+import { playerReputationManager } from '../../managers/PlayerReputationManager'
+import { progressionManager } from '../../managers/ProgressionManager'
+import { worldEventSystem } from '../../managers/WorldEventSystem'
+import { storyArcManager } from '../../managers/StoryArcManager'
+import { dialogueTreeManager } from '../DialogueTreeManager'
 
 // Adventure commands register on import
 import './AdventureCommands'
@@ -50,8 +57,29 @@ export function registerAllCommands() {
   // Defense commands (lawyer, hideout, payoff)
   registerDefenseCommands()
 
+  // Opportunity commands (negotiate, events, arc)
+  registerOpportunityCommands()
+
   // Initialize NPC manager for random messages
   terminalNPCManager.initialize()
+
+  // Initialize heat event system (Detective Morgan, raid warnings)
+  heatEventSystem.initialize()
+
+  // Initialize player reputation manager (factions, trust)
+  playerReputationManager.initialize()
+
+  // Initialize progression manager (level-based unlocks)
+  progressionManager.initialize()
+
+  // Initialize world event system (police crackdown, gang war, etc)
+  worldEventSystem.initialize()
+
+  // Initialize story arc manager (multi-phase missions)
+  storyArcManager.initialize()
+
+  // Initialize dialogue tree manager (negotiations)
+  dialogueTreeManager.initialize()
 
   commandsRegistered = true
   console.log('[Commands] All commands registered')

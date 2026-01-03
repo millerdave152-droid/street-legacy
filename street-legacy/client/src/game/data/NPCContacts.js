@@ -118,6 +118,72 @@ export const NPC_CONTACTS = {
     }
   },
 
+  marcus: {
+    id: 'marcus',
+    name: 'Marcus',
+    role: NPC_ROLES.FIXER,
+    archetype: 'informant',
+    displayPrefix: '[MARCUS]',
+    avatar: 'M',
+    color: 0x8b5cf6, // Purple
+
+    personality: 'mentor',
+    description: 'Old-school hustler who gives general advice. Seen it all.',
+
+    baseTrust: 25,
+    loyaltyType: LOYALTY_TYPES.REPUTATION,
+    riskLevel: RISK_LEVELS.LOW,
+    reliability: 0.85,
+    scamChance: 0,
+    betrayalChance: 0.02,
+
+    minLevel: 1, // Starting Zone (Level 1-3)
+    maxLevel: null,
+    unlockCondition: null,
+    blocked: false,
+
+    messageFrequency: { min: 300000, max: 600000 }, // 5-10 min
+    maxMessagesPerDay: 4,
+    preferredMessageTypes: ['INTEL', 'TIP', 'WARNING'],
+
+    speechPatterns: {
+      greetings: [
+        'Listen up kid...',
+        'Let me tell you something...',
+        'Word of advice...',
+        'Been watching you work...'
+      ],
+      closings: [
+        'Stay smart out there.',
+        'Trust nobody.',
+        'Learn from my mistakes.',
+        'Survival is the only win.'
+      ],
+      style: 'mentoring'
+    },
+
+    messageTemplates: {
+      INTEL: [
+        'The cops rotate shifts every 8 hours. Plan around that.',
+        'Banks are easy targets but heat sticks longer. Worth remembering.',
+        'Pawn shops on the east side give better rates. Just saying.',
+        'Night time is amateur hour. Real money moves at dawn.'
+      ],
+      TIP: [
+        'Never hit the same spot twice in a week. That\'s how you get caught.',
+        'Keep your heat under 30% and you\'re invisible. Trust me.',
+        'Save up for a lawyer before you need one. Insurance.',
+        'The feds don\'t chase small fish. Stay small, stay free.'
+      ],
+      WARNING: [
+        'Kid, I\'ve seen that look before. Slow down.',
+        'Heat\'s rising. Time to go quiet for a while.',
+        'That contact you\'ve been talking to? Something feels off.',
+        'Don\'t get cocky. That\'s when they get you.'
+      ]
+    }
+  },
+
   watcher: {
     id: 'watcher',
     name: 'Watcher',
@@ -137,7 +203,7 @@ export const NPC_CONTACTS = {
     scamChance: 0.01,
     betrayalChance: 0.05,
 
-    minLevel: 1,
+    minLevel: 4, // Expansion tier (Level 4-6)
     maxLevel: null,
     unlockCondition: null,
     blocked: false,
@@ -196,7 +262,7 @@ export const NPC_CONTACTS = {
     scamChance: 0.02,
     betrayalChance: 0.15,
 
-    minLevel: 3,
+    minLevel: 7, // Criminal Network tier (Level 7-9)
     maxLevel: null,
     unlockCondition: null,
     blocked: false,
@@ -259,7 +325,7 @@ export const NPC_CONTACTS = {
     scamChance: 0.85, // Very high scam chance!
     betrayalChance: 0.3,
 
-    minLevel: 1,
+    minLevel: 4, // Expansion tier (Level 4-6) - Scams appear
     maxLevel: null,
     unlockCondition: null,
     blocked: false,
@@ -321,7 +387,7 @@ export const NPC_CONTACTS = {
     scamChance: 0.05,
     betrayalChance: 0.1,
 
-    minLevel: 5,
+    minLevel: 4, // Expansion tier (Level 4-6) - Bulk trade access
     maxLevel: null,
     unlockCondition: null,
     blocked: false,
@@ -375,9 +441,9 @@ export const NPC_CONTACTS = {
     scamChance: 0.02,
     betrayalChance: 0.2,
 
-    minLevel: 8, // Level-gated!
+    minLevel: 7, // Criminal Network tier (Level 7-9)
     maxLevel: null,
-    unlockCondition: 'level_8',
+    unlockCondition: 'level_7',
     blocked: false,
 
     messageFrequency: { min: 480000, max: 900000 }, // 8-15 min
@@ -441,9 +507,9 @@ export const NPC_CONTACTS = {
     scamChance: 0,
     betrayalChance: 0.1,
 
-    minLevel: 5,
+    minLevel: 10, // Crew Access tier (Level 10-12)
     maxLevel: null,
-    unlockCondition: null,
+    unlockCondition: 'level_10',
     blocked: false,
     faction: 'janeAndFinch',
 
@@ -500,9 +566,9 @@ export const NPC_CONTACTS = {
     scamChance: 0,
     betrayalChance: 0.05,
 
-    minLevel: 15, // Level-gated!
+    minLevel: 13, // Elite tier (Level 13-15)
     maxLevel: null,
-    unlockCondition: 'level_15',
+    unlockCondition: 'level_13',
     blocked: false,
 
     messageFrequency: { min: 600000, max: 1200000 }, // 10-20 min

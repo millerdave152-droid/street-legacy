@@ -12,6 +12,7 @@ import { commandRegistry, CATEGORIES } from '../CommandRegistry'
 import { terminalNPCManager } from '../../managers/TerminalNPCManager'
 import { gameManager } from '../../GameManager'
 import { NPC_CONTACTS, getContactByName, getContactById } from '../../data/NPCContacts'
+import { progressionManager, PROGRESSION_TIERS } from '../../managers/ProgressionManager'
 
 /**
  * Get trust level display string
@@ -140,58 +141,91 @@ export function registerContactCommands() {
     aliases: ['people', 'network', 'who'],
     handler: async ({ terminal }) => {
       const player = gameManager.player
+      const playerLevel = player?.level || 1
       const contactsWithStatus = terminalNPCManager.getAllContactsWithStatus(player)
+      const currentTier = progressionManager.getCurrentTier()
 
       const output = [
         { text: ``, type: 'system' },
-        { text: `:: KNOWN CONTACTS ::`, type: 'system' },
+        { text: `:: CONTACT NETWORK ::`, type: 'system' },
+        { text: `Level ${playerLevel} | Tier: ${currentTier.name}`, type: 'handler' },
         { text: ``, type: 'system' },
       ]
 
-      // Group by archetype
-      const groups = {
-        informant: { name: 'INFORMANTS', contacts: [] },
-        dealer: { name: 'DEALERS', contacts: [] },
-        crew: { name: 'CREW', contacts: [] },
-        danger: { name: 'UNKNOWN', contacts: [] }
+      // Separate unlocked and locked contacts
+      const available = contactsWithStatus.filter(c => c.isUnlocked)
+      const locked = contactsWithStatus.filter(c => !c.isUnlocked)
+
+      // Show available contacts by archetype
+      if (available.length > 0) {
+        output.push({ text: `[AVAILABLE CONTACTS]`, type: 'success' })
+
+        // Group by archetype
+        const groups = {
+          informant: [],
+          dealer: [],
+          crew: []
+        }
+
+        available.forEach(contact => {
+          const group = groups[contact.archetype] || groups.informant
+          group.push(contact)
+        })
+
+        for (const [archetype, contacts] of Object.entries(groups)) {
+          contacts.forEach(contact => {
+            const trust = getTrustDisplay(contact.baseTrust || 0)
+            let statusBadges = []
+
+            if (contact.isBlocked) statusBadges.push('[BLOCKED]')
+            if (contact.isSilent) statusBadges.push('[SILENT]')
+            if (contact.riskLevel === 'high' || contact.riskLevel === 'very_high') statusBadges.push('[RISKY]')
+
+            let line = `  ${contact.name} (${contact.role})`
+            if (statusBadges.length > 0) line += ' ' + statusBadges.join(' ')
+
+            if (contact.isBlocked) {
+              output.push({ text: line, type: 'error' })
+            } else if (contact.isSilent) {
+              output.push({ text: line + ' - Heat too high', type: 'warning' })
+            } else {
+              output.push({ text: line, type: trust.color })
+            }
+          })
+        }
+
+        output.push({ text: ``, type: 'system' })
       }
 
-      contactsWithStatus.forEach(contact => {
-        const group = groups[contact.archetype] || groups.danger
-        group.contacts.push(contact)
-      })
+      // Show locked contacts grouped by tier
+      if (locked.length > 0) {
+        output.push({ text: `[LOCKED - Higher level required]`, type: 'response' })
 
-      // Display each group
-      for (const [key, group] of Object.entries(groups)) {
-        if (group.contacts.length === 0) continue
+        // Sort by minLevel
+        locked.sort((a, b) => (a.minLevel || 99) - (b.minLevel || 99))
 
-        output.push({ text: `[${group.name}]`, type: 'handler' })
-
-        group.contacts.forEach(contact => {
-          const trust = getTrustDisplay(contact.baseTrust || 0)
-          const status = getStatusIndicators(contact, player)
-          const available = contact.isUnlocked && !contact.isBlocked && !contact.isSilent
-
-          let line = `  ${contact.name}`
-          if (contact.role) line += ` (${contact.role})`
-          if (status) line += ` ${status}`
-
-          if (!contact.isUnlocked) {
-            output.push({ text: line + ' [LOCKED]', type: 'response' })
-          } else if (contact.isBlocked) {
-            output.push({ text: line, type: 'error' })
-          } else if (contact.isSilent) {
-            output.push({ text: line + ' [SILENT - Heat too high]', type: 'warning' })
-          } else {
-            output.push({ text: line, type: trust.color })
-          }
+        locked.forEach(contact => {
+          const tierName = getTierForLevel(contact.minLevel || 1)
+          output.push({
+            text: `  ${contact.name} (${contact.role}) - Lv${contact.minLevel} [${tierName}]`,
+            type: 'response'
+          })
         })
 
         output.push({ text: ``, type: 'system' })
       }
 
-      output.push({ text: `Type 'msg <name>' to contact someone.`, type: 'system' })
-      output.push({ text: `Type 'block <name>' to block a contact.`, type: 'system' })
+      // Show progression info
+      const nextTier = progressionManager.getNextTier()
+      if (nextTier) {
+        output.push({
+          text: `Next tier: ${nextTier.name} at Level ${nextTier.minLevel}`,
+          type: 'system'
+        })
+      }
+
+      output.push({ text: ``, type: 'system' })
+      output.push({ text: `Commands: msg <name> | block <name> | unblock`, type: 'system' })
 
       return { output }
     },
@@ -199,6 +233,18 @@ export function registerContactCommands() {
     usage: 'contacts',
     category: CATEGORIES.SOCIAL,
   })
+
+  /**
+   * Helper to get tier name for a level
+   */
+  function getTierForLevel(level) {
+    for (const [key, tier] of Object.entries(PROGRESSION_TIERS)) {
+      if (level >= tier.minLevel && level <= tier.maxLevel) {
+        return tier.name
+      }
+    }
+    return 'Elite'
+  }
 
   // ============================================================
   // BLOCK Command - Block an NPC

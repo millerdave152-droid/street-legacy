@@ -16,6 +16,115 @@ class SessionContextClass {
     this.pendingClarification = null
     this.entityMemory = {} // Remember mentioned entities (names, places, items)
     this.lastActionContext = null // What action was just taken
+
+    // Phase 6: Context-aware response selection
+    this.intentHistory = []          // Last 5 intents for pattern detection
+    this.templateUsage = new Map()   // Track which templates were used recently
+    this.repeatQuestions = new Map() // Track repeated questions for frustration detection
+    this.sessionStartTime = Date.now()
+    this.interactionCount = 0        // Total interactions this session
+  }
+
+  /**
+   * Track intent usage for smarter template selection
+   */
+  recordIntent(intent) {
+    this.intentHistory.unshift(intent)
+    if (this.intentHistory.length > 5) {
+      this.intentHistory.pop()
+    }
+    this.interactionCount++
+  }
+
+  /**
+   * Record template usage to avoid repetition
+   */
+  recordTemplateUsage(intent, templateIndex) {
+    if (!this.templateUsage.has(intent)) {
+      this.templateUsage.set(intent, [])
+    }
+    const usage = this.templateUsage.get(intent)
+    usage.unshift({ index: templateIndex, time: Date.now() })
+    // Keep only last 5 uses per intent
+    if (usage.length > 5) {
+      usage.pop()
+    }
+  }
+
+  /**
+   * Get template indices to avoid (recently used)
+   */
+  getRecentlyUsedTemplates(intent, withinTurns = 3) {
+    if (!this.templateUsage.has(intent)) {
+      return []
+    }
+    return this.templateUsage.get(intent)
+      .slice(0, withinTurns)
+      .map(u => u.index)
+  }
+
+  /**
+   * Track repeated questions for frustration detection
+   */
+  trackQuestion(normalizedQuery) {
+    const key = normalizedQuery.toLowerCase().trim()
+    const count = (this.repeatQuestions.get(key) || 0) + 1
+    this.repeatQuestions.set(key, count)
+    return count
+  }
+
+  /**
+   * Check if user is frustrated (asking same thing repeatedly)
+   */
+  isFrustrated(normalizedQuery) {
+    const key = normalizedQuery.toLowerCase().trim()
+    const count = this.repeatQuestions.get(key) || 0
+    return count >= 3
+  }
+
+  /**
+   * Check if this is a repeat question (asked before)
+   */
+  isRepeatQuestion(normalizedQuery) {
+    const key = normalizedQuery.toLowerCase().trim()
+    return (this.repeatQuestions.get(key) || 0) >= 2
+  }
+
+  /**
+   * Get session duration in minutes
+   */
+  getSessionDuration() {
+    return Math.floor((Date.now() - this.sessionStartTime) / 60000)
+  }
+
+  /**
+   * Get user familiarity level (based on interaction count)
+   */
+  getFamiliarityLevel() {
+    if (this.interactionCount < 5) return 'new'
+    if (this.interactionCount < 20) return 'familiar'
+    if (this.interactionCount < 50) return 'regular'
+    return 'veteran'
+  }
+
+  /**
+   * Check if same intent was just asked
+   */
+  isSameIntentAsLast(intent) {
+    return this.intentHistory.length > 0 && this.intentHistory[0] === intent
+  }
+
+  /**
+   * Get context modifiers for response generation
+   */
+  getResponseModifiers() {
+    return {
+      familiarity: this.getFamiliarityLevel(),
+      sessionDuration: this.getSessionDuration(),
+      isRepeat: this.intentHistory.length >= 2 && this.intentHistory[0] === this.intentHistory[1],
+      recentIntents: this.intentHistory.slice(0, 3),
+      interactionCount: this.interactionCount,
+    }
   }
 
   /**

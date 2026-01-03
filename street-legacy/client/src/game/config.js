@@ -67,6 +67,10 @@ import { GetawayGame } from './scenes/minigames/GetawayGame'
 import { NegotiationGame } from './scenes/minigames/NegotiationGame'
 import { SurveillanceGame } from './scenes/minigames/SurveillanceGame'
 
+// Casino games
+import { CoinFlipScene } from './scenes/casino/CoinFlipScene'
+import { DiceRollScene } from './scenes/casino/DiceRollScene'
+
 // Detect if running in production
 const isProduction = import.meta.env.PROD
 
@@ -273,7 +277,11 @@ export const gameConfig = {
     HackingGame,
     GetawayGame,
     NegotiationGame,
-    SurveillanceGame
+    SurveillanceGame,
+
+    // Casino games
+    CoinFlipScene,
+    DiceRollScene
   ],
 
   // Callbacks

@@ -14,6 +14,8 @@
 import { gameManager } from '../GameManager'
 import { responseGenerator } from './ResponseGenerator'
 import { aiIntelAnalyzer } from './AIIntelAnalyzer'
+import { sarahPersonality } from './SarahPersonality'
+import { messageQueue, PRIORITY, MESSAGE_TYPES } from '../terminal/MessageQueue'
 
 // Trigger thresholds and cooldowns
 const TRIGGERS = {
@@ -71,6 +73,10 @@ const TRIGGERS = {
   HEAT_COOLED: {
     threshold: 30, // Heat below this after being high
     cooldown: 5 * 60 * 1000, // 5 minutes
+  },
+  INSIDER_TIP: {
+    cooldown: 15 * 60 * 1000, // 15 minutes - rare but special
+    chance: 0.1, // 10% chance on each check for trusted+ users
   },
 }
 
@@ -262,8 +268,26 @@ class ProactiveMonitor {
     // AI threat check
     this.checkAIThreats()
 
+    // Insider tip check (only for trusted+ users)
+    this.checkInsiderTip()
+
     // Store state for comparison
     this.previousPlayerState = { ...playerData }
+  }
+
+  /**
+   * Phase 10: Check if we should share an insider tip
+   * Only for trusted+ relationship tier
+   */
+  checkInsiderTip() {
+    if (!sarahPersonality.canShareInsiderInfo()) return
+    if (!this.shouldNotify('insiderTip')) return
+    if (Math.random() > TRIGGERS.INSIDER_TIP.chance) return
+
+    const tip = sarahPersonality.getInsiderTip()
+    if (tip) {
+      this.sendNotification('insiderTip', tip, PRIORITY.LOW)
+    }
   }
 
   /**
@@ -361,17 +385,37 @@ class ProactiveMonitor {
   }
 
   /**
-   * Send a notification through the callback
+   * Send a notification through callback and/or message queue
+   * Phase 10: Enhanced with MessageQueue integration
    */
-  sendNotification(triggerType, message) {
+  sendNotification(triggerType, message, priority = PRIORITY.NORMAL) {
     this.lastNotifications.set(triggerType, Date.now())
 
+    // Apply personality to message
+    const formattedMessage = sarahPersonality.injectNickname(message)
+
+    // Send through message queue if available
+    if (messageQueue.initialized) {
+      messageQueue.add({
+        content: formattedMessage,
+        type: MESSAGE_TYPES.SARAH,
+        priority,
+        sender: 'S.A.R.A.H.',
+        metadata: {
+          proactive: true,
+          triggerType,
+        },
+      })
+    }
+
+    // Also use callback if available
     if (this.notificationCallback) {
       this.notificationCallback({
         type: 'sarah',
         triggerType,
-        message,
+        message: formattedMessage,
         timestamp: Date.now(),
+        priority,
       })
     }
 

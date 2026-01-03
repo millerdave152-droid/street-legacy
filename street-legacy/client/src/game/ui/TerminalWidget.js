@@ -9,6 +9,7 @@ import Phaser from 'phaser'
 import { terminalManager, OUTPUT_TYPES } from '../managers/TerminalManager'
 import { registerAllCommands } from '../terminal/commands'
 import { COLORS, DEPTH, LAYOUT, getTerminalStyle, toHexString, SYMBOLS } from './NetworkTheme'
+import { parseClickables, hasClickables, getPlainText } from '../terminal/ClickableParser'
 
 // Terminal color mapping
 const OUTPUT_COLORS = {
@@ -32,6 +33,15 @@ const OUTPUT_COLORS = {
   [OUTPUT_TYPES.SARAH_CRITICAL]: 0xf87171,   // Bright red for critical
   [OUTPUT_TYPES.SARAH_INTEL]: 0xa78bfa,      // Light purple for intel
   [OUTPUT_TYPES.SARAH_THREAT]: 0xfb7185,     // Pink-red for threats
+
+  // NPC messaging colors
+  [OUTPUT_TYPES.NPC_INTEL]: 0x06b6d4,        // Cyan for intel
+  [OUTPUT_TYPES.NPC_DEAL]: 0x22c55e,         // Green for deals
+  [OUTPUT_TYPES.NPC_JOB]: 0xfbbf24,          // Amber for jobs
+  [OUTPUT_TYPES.NPC_WARNING]: 0xf97316,      // Orange for NPC warnings
+  [OUTPUT_TYPES.NPC_URGENT]: 0xef4444,       // Red for urgent
+  [OUTPUT_TYPES.NPC_BETRAYAL]: 0xef4444,     // Red for betrayal
+  [OUTPUT_TYPES.NPC_SCAM]: 0x22c55e,         // Green (looks like deal to hide scam)
 }
 
 export class TerminalWidget {
@@ -59,7 +69,11 @@ export class TerminalWidget {
     // State
     this.isFocused = false
     this.visibleLines = 7
-    this.lineHeight = 16
+    this.baseLineHeight = 16
+    this.lineBuffer = 4  // Extra spacing between lines
+
+    // Phase 12: Clickable shortcuts
+    this.clickableLinks = []  // Store clickable regions
 
     // Listener cleanup
     this.unsubscribe = null
@@ -173,25 +187,28 @@ export class TerminalWidget {
    */
   createOutputArea(headerHeight) {
     const outputY = this.y + headerHeight + 5
-    const outputHeight = this.height - headerHeight - 35 // Leave room for input
+    this.outputAreaHeight = this.height - headerHeight - 35 // Leave room for input
 
     // Output container for scrolling
     this.outputContainer = this.scene.add.container(this.x + 8, outputY)
     this.container.add(this.outputContainer)
 
-    // Create text objects for visible lines
-    for (let i = 0; i < this.visibleLines; i++) {
+    // Create text objects for visible lines (create extra for wrapped text)
+    const maxTextObjects = this.visibleLines + 5  // Extra buffer for shorter wrapped lines
+    for (let i = 0; i < maxTextObjects; i++) {
       const lineText = this.scene.add.text(
         0,
-        i * this.lineHeight,
+        0,  // Y position will be set dynamically in renderOutput
         '',
         {
           fontFamily: '"JetBrains Mono", "Fira Code", "Courier New", monospace',
           fontSize: '11px',
           color: '#cccccc',
-          wordWrap: { width: this.width - 20, useAdvancedWrap: true }
+          wordWrap: { width: this.width - 24, useAdvancedWrap: true },
+          lineSpacing: 2
         }
       )
+      lineText.setVisible(false)
       this.outputTexts.push(lineText)
       this.outputContainer.add(lineText)
     }
@@ -199,7 +216,7 @@ export class TerminalWidget {
     // Scroll indicator
     this.scrollIndicator = this.scene.add.text(
       this.x + this.width - 15,
-      outputY + outputHeight / 2,
+      outputY + this.outputAreaHeight / 2,
       '',
       {
         fontFamily: '"JetBrains Mono", monospace',
@@ -458,29 +475,72 @@ export class TerminalWidget {
   }
 
   /**
-   * Render output lines
+   * Render output lines with dynamic height calculation
+   * Phase 12: Now supports clickable shortcuts
    */
   renderOutput() {
-    const visibleOutput = terminalManager.getVisibleOutput(this.visibleLines)
+    // Get more lines than we might display to account for variable heights
+    const allOutput = terminalManager.getAllOutput()
+    const scrollOffset = terminalManager.scrollOffset || 0
 
-    // Update text objects
-    for (let i = 0; i < this.visibleLines; i++) {
-      const textObj = this.outputTexts[i]
+    // Calculate which lines to show based on scroll
+    const startIndex = Math.max(0, allOutput.length - this.visibleLines - scrollOffset)
+    const endIndex = allOutput.length - scrollOffset
+    const visibleOutput = allOutput.slice(startIndex, endIndex)
+
+    // Hide all text objects first
+    for (const textObj of this.outputTexts) {
+      textObj.setVisible(false)
+      textObj.setText('')
+    }
+
+    // Clear previous clickable links
+    this.clearClickableLinks()
+
+    // Render lines with dynamic Y positioning
+    let currentY = 0
+    let linesRendered = 0
+
+    for (let i = 0; i < visibleOutput.length && linesRendered < this.outputTexts.length; i++) {
       const line = visibleOutput[i]
+      const textObj = this.outputTexts[linesRendered]
 
-      if (line) {
-        textObj.setText(line.text)
-        textObj.setColor(toHexString(OUTPUT_COLORS[line.type] || 0xcccccc))
-        textObj.setVisible(true)
-      } else {
-        textObj.setText('')
-        textObj.setVisible(false)
+      if (!line || !textObj) continue
+
+      // Parse for clickables
+      const parsed = parseClickables(line.text)
+      const displayText = parsed.plainText
+
+      // Set text and color first
+      textObj.setText(displayText)
+      textObj.setColor(toHexString(OUTPUT_COLORS[line.type] || 0xcccccc))
+
+      // Position based on cumulative height
+      textObj.setY(currentY)
+      textObj.setVisible(true)
+
+      // Create clickable regions if present
+      if (parsed.hasClickables) {
+        this.createClickableLinks(textObj, parsed.segments, currentY)
       }
+
+      // Get actual rendered height (accounts for word wrap)
+      const bounds = textObj.getBounds()
+      const textHeight = bounds.height > 0 ? bounds.height : this.baseLineHeight
+
+      // Move to next position with buffer
+      currentY += textHeight + this.lineBuffer
+
+      // Stop if we've exceeded the output area
+      if (currentY > this.outputAreaHeight) {
+        break
+      }
+
+      linesRendered++
     }
 
     // Update scroll indicator
-    const totalLines = terminalManager.getAllOutput().length
-    const scrollOffset = terminalManager.scrollOffset
+    const totalLines = allOutput.length
     if (scrollOffset > 0) {
       this.scrollIndicator.setText('↑')
       this.scrollIndicator.setVisible(true)
@@ -490,6 +550,64 @@ export class TerminalWidget {
     } else {
       this.scrollIndicator.setVisible(false)
     }
+  }
+
+  /**
+   * Phase 12: Create clickable link hit areas
+   */
+  createClickableLinks(textObj, segments, lineY) {
+    const charWidth = 6.6  // Approximate monospace char width
+    const baseX = this.outputContainer.x
+
+    for (const segment of segments) {
+      if (segment.type !== 'clickable') continue
+
+      // Calculate position of this clickable segment
+      const startX = baseX + segment.startIndex * charWidth
+      const width = segment.label.length * charWidth + 4
+      const height = 16
+
+      // Create invisible hit area
+      const hitArea = this.scene.add.rectangle(
+        startX + width / 2,
+        this.outputContainer.y + lineY + height / 2 - 2,
+        width,
+        height,
+        0x00ffff,
+        0  // Invisible
+      ).setInteractive({ useHandCursor: true })
+
+      // Store command for click handler
+      hitArea.clickCommand = segment.command
+
+      // Hover effect - highlight the text
+      hitArea.on('pointerover', () => {
+        hitArea.setFillStyle(0x00ffff, 0.15)
+      })
+
+      hitArea.on('pointerout', () => {
+        hitArea.setFillStyle(0x00ffff, 0)
+      })
+
+      // Click - execute command
+      hitArea.on('pointerdown', () => {
+        this.focus()
+        terminalManager.executeCommand(segment.command)
+      })
+
+      this.container.add(hitArea)
+      this.clickableLinks.push(hitArea)
+    }
+  }
+
+  /**
+   * Phase 12: Clear all clickable link hit areas
+   */
+  clearClickableLinks() {
+    for (const link of this.clickableLinks) {
+      link.destroy()
+    }
+    this.clickableLinks = []
   }
 
   /**
@@ -588,6 +706,9 @@ export class TerminalWidget {
     if (this.scene.input.keyboard && this.keyboardListener) {
       this.scene.input.keyboard.off('keydown', this.keyboardListener)
     }
+
+    // Phase 12: Clean up clickable links
+    this.clearClickableLinks()
 
     // Destroy container
     if (this.container) {
