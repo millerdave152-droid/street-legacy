@@ -18,7 +18,12 @@ import { COLORS, BORDERS, DEPTH, LAYOUT, getTextStyle, getTerminalStyle, toHexSt
 import { networkTransition } from '../ui/NetworkTransition'
 
 // Import local data from existing scenes
-import { HEISTS, getPlayerData, savePlayerData } from '../data/GameData.js'
+import { HEISTS, getPlayerData, savePlayerData, applyTimeModifierToJob } from '../data/GameData.js'
+
+// Import mini-game mappings for direct execution
+import { getJobMapping, getSceneKeyForGame, createDefaultJobMapping } from '../config/JobGameMapping'
+import { getCrimeMapping, getSceneKeyForGame as getSceneKeyForCrime } from '../config/CrimeGameMapping'
+import { networkMessageManager } from '../managers/NetworkMessageManager'
 
 // Local crime database
 const LOCAL_CRIMES = [
@@ -85,6 +90,72 @@ export class OperationsHubScene extends BaseScene {
     if (data?.tab) {
       this.activeTab = data.tab
     }
+
+    // Check if we're returning from a mini-game
+    this.returningFromMiniGame = !!(data?.miniGameResult)
+    this.miniGameResult = data?.miniGameResult || null
+    this.returnedItemType = data?.itemType || null
+    this.returnedItemData = data?.itemData || null
+
+    if (this.returningFromMiniGame) {
+      console.log('[OperationsHubScene] Returning from mini-game with result:', data.miniGameResult)
+      console.log('[OperationsHubScene] Item type:', this.returnedItemType)
+      console.log('[OperationsHubScene] Item data:', this.returnedItemData)
+    }
+  }
+
+  /**
+   * Clean up other scenes to prevent layer conflicts
+   * This is critical when returning from mini-games
+   */
+  cleanupOtherScenes() {
+    console.log('[OperationsHubScene] Cleaning up other scenes...')
+
+    // List of all mini-game scenes that might still be running
+    const miniGameScenes = [
+      'SnakeGame', 'LockPickGame', 'QTEGame', 'FroggerGame',
+      'MemoryGame', 'SteadyHandGame', 'ChaseGame', 'SniperGame',
+      'SafeCrackGame', 'WireGame', 'RhythmGame', 'HackingGame',
+      'GetawayGame', 'NegotiationGame', 'SurveillanceGame', 'MiniGameResult'
+    ]
+
+    // Stop all mini-game scenes
+    miniGameScenes.forEach(sceneKey => {
+      try {
+        if (this.scene.isActive(sceneKey) || this.scene.isPaused(sceneKey)) {
+          this.scene.stop(sceneKey)
+          console.log(`[OperationsHubScene] Stopped scene: ${sceneKey}`)
+        }
+      } catch (e) {
+        // Scene may not exist, ignore
+      }
+    })
+
+    // Also stop other hub/detail scenes that might be lingering
+    const otherScenes = ['JobScene', 'CrimeScene', 'HeistsScene']
+    otherScenes.forEach(sceneKey => {
+      try {
+        if (this.scene.isActive(sceneKey)) {
+          this.scene.stop(sceneKey)
+          console.log(`[OperationsHubScene] Stopped scene: ${sceneKey}`)
+        }
+      } catch (e) {
+        // Ignore
+      }
+    })
+
+    // Reset camera state to ensure clean rendering
+    try {
+      this.cameras.main.setZoom(1)
+      this.cameras.main.setAlpha(1)
+      this.cameras.main.resetFX()
+      this.cameras.main.setScroll(0, 0)
+      this.cameras.main.setBackgroundColor(0x0a0a0a)
+    } catch (e) {
+      console.warn('[OperationsHubScene] Camera reset warning:', e)
+    }
+
+    console.log('[OperationsHubScene] Scene cleanup complete')
   }
 
   async create() {
@@ -93,6 +164,10 @@ export class OperationsHubScene extends BaseScene {
 
     // CRITICAL: Block input until scene is fully ready
     this.readiness.beginCreate()
+
+    // CRITICAL: Stop ALL other active scenes to prevent layer conflicts
+    // This is especially important when returning from mini-games
+    this.cleanupOtherScenes()
 
     // CRITICAL: Bring this scene to top of scene stack for input priority
     // This ensures clicks go to hub scene, not GameScene below
@@ -146,6 +221,11 @@ export class OperationsHubScene extends BaseScene {
     // Emit sceneReady for NetworkTransition coordination
     this.events.emit('sceneReady')
     console.log('[OperationsHubScene] create() completed, scene fully ready')
+
+    // Process mini-game result if returning from one
+    if (this.returningFromMiniGame && this.miniGameResult && this.returnedItemData) {
+      this.processMiniGameResult()
+    }
 
     // Handle scene resume/pause for input management
     this.events.on('resume', () => {
@@ -415,16 +495,23 @@ export class OperationsHubScene extends BaseScene {
     const { width, height } = this.cameras.main
     const player = gameManager.player || getPlayerData() || {}
     const playerLevel = player.level || 1
+    const playerEnergy = player.energy || 100
+    const playerHeat = player.heat || 0
 
-    // Filter available items
-    const availableItems = data.filter(item => {
-      const reqLevel = item.min_level || item.required_level || 1
-      return reqLevel <= playerLevel
+    // Sort items: unlocked first, then by level requirement
+    const sortedItems = [...data].sort((a, b) => {
+      const aLevel = a.min_level || a.required_level || 1
+      const bLevel = b.min_level || b.required_level || 1
+      const aUnlocked = aLevel <= playerLevel
+      const bUnlocked = bLevel <= playerLevel
+      if (aUnlocked && !bUnlocked) return -1
+      if (!aUnlocked && bUnlocked) return 1
+      return aLevel - bLevel
     })
 
-    if (availableItems.length === 0) {
+    if (sortedItems.length === 0) {
       const noDataText = this.add.text(width / 2, height / 2,
-        `${SYMBOLS.system} NO ${this.activeTab.toUpperCase()} AVAILABLE AT YOUR LEVEL`, {
+        `${SYMBOLS.system} NO ${this.activeTab.toUpperCase()} AVAILABLE`, {
         ...getTerminalStyle('md'),
         color: toHexString(COLORS.text.muted)
       }).setOrigin(0.5).setDepth(DEPTH.STATS_BAR)
@@ -437,24 +524,47 @@ export class OperationsHubScene extends BaseScene {
     const cardSpacing = 8
     const maxVisibleY = height - 20
 
-    availableItems.forEach((item, index) => {
+    sortedItems.forEach((item, index) => {
       const y = startY + index * (cardHeight + cardSpacing)
       if (y < maxVisibleY) {
-        this.createItemCard(item, y, cardHeight)
+        // Determine lock reason
+        const reqLevel = item.min_level || item.required_level || 1
+        const energyCost = item.energy_cost || item.stamina_cost || 10
+        const heatLimit = item.heat_limit || 100
+
+        const lockInfo = {
+          levelLocked: reqLevel > playerLevel,
+          requiredLevel: reqLevel,
+          energyLocked: playerEnergy < energyCost,
+          requiredEnergy: energyCost,
+          heatLocked: playerHeat > heatLimit,
+          heatLimit: heatLimit
+        }
+
+        this.createItemCard(item, y, cardHeight, lockInfo)
       }
     })
 
     // Calculate scroll limits
-    this.maxScrollY = Math.max(0, (availableItems.length * (cardHeight + cardSpacing)) - (maxVisibleY - startY))
+    this.maxScrollY = Math.max(0, (sortedItems.length * (cardHeight + cardSpacing)) - (maxVisibleY - startY))
   }
 
-  createItemCard(item, y, cardHeight) {
+  createItemCard(item, y, cardHeight, lockInfo = {}) {
     const { width } = this.cameras.main
-    const player = gameManager.player || getPlayerData() || {}
 
-    const playerEnergy = player.energy || 100
-    const energyCost = item.energy_cost || item.stamina_cost || 10
-    const canExecute = playerEnergy >= energyCost
+    // Determine if locked and why
+    const isLocked = lockInfo.levelLocked || lockInfo.energyLocked || lockInfo.heatLocked
+    const canExecute = !isLocked
+
+    // Build lock reason message
+    let lockReason = ''
+    if (lockInfo.levelLocked) {
+      lockReason = `UNLOCK AT LEVEL ${lockInfo.requiredLevel}`
+    } else if (lockInfo.energyLocked) {
+      lockReason = `REQUIRES ${lockInfo.requiredEnergy} ENERGY`
+    } else if (lockInfo.heatLocked) {
+      lockReason = `REDUCE HEAT BELOW ${lockInfo.heatLimit}%`
+    }
 
     // Determine card style based on tab and item type
     let cardConfig
@@ -519,11 +629,11 @@ export class OperationsHubScene extends BaseScene {
         })
       })
     } else {
-      card.setStrokeStyle(1, COLORS.bg.elevated, 0.3)
+      card.setStrokeStyle(1, 0xef4444, 0.3)
     }
 
     // Icon
-    const iconBg = this.add.circle(45, y + cardHeight / 2 - 6, 16, cardConfig.color, 0.15)
+    const iconBg = this.add.circle(45, y + cardHeight / 2 - 6, 16, cardConfig.color, canExecute ? 0.15 : 0.05)
       .setDepth(DEPTH.PANEL_CONTENT)
     this.contentItems.push(iconBg)
 
@@ -533,25 +643,33 @@ export class OperationsHubScene extends BaseScene {
     }).setOrigin(0.5).setDepth(DEPTH.LIST_ITEMS).setAlpha(canExecute ? 1 : 0.4)
     this.contentItems.push(iconText)
 
-    // Item name
+    // Item name (dimmed if locked)
     const nameText = this.add.text(70, y + 10, item.name.toUpperCase(), {
       ...getTextStyle('sm', canExecute ? COLORS.text.primary : COLORS.text.muted, 'terminal'),
       fontStyle: 'bold'
-    }).setDepth(DEPTH.PANEL_CONTENT)
+    }).setDepth(DEPTH.PANEL_CONTENT).setAlpha(canExecute ? 1 : 0.4)
     this.contentItems.push(nameText)
 
-    // Description
-    if (item.description) {
+    // Show lock reason instead of description when locked
+    if (isLocked && lockReason) {
+      // Lock icon + requirement text in bright red
+      const lockDisplay = this.add.text(70, y + 28, `🔒 ${lockReason}`, {
+        ...getTextStyle('xs', 0xef4444, 'terminal'),
+        fontStyle: 'bold'
+      }).setDepth(DEPTH.PANEL_CONTENT)
+      this.contentItems.push(lockDisplay)
+    } else if (item.description) {
+      // Normal description
       const descText = this.add.text(70, y + 28, item.description.substring(0, 38) + (item.description.length > 38 ? '...' : ''), {
-        ...getTextStyle('xs', canExecute ? COLORS.text.secondary : COLORS.text.muted, 'body')
+        ...getTextStyle('xs', COLORS.text.secondary, 'body')
       }).setDepth(DEPTH.PANEL_CONTENT)
       this.contentItems.push(descText)
     }
 
-    // Stats row
+    // Stats row (dimmed if locked)
     this.createStatsRow(item, y, cardHeight, canExecute, cardConfig)
 
-    // Reward display
+    // Reward display (dimmed if locked)
     this.createRewardDisplay(item, y, cardHeight, canExecute)
   }
 
@@ -721,48 +839,659 @@ export class OperationsHubScene extends BaseScene {
     console.log('[OperationsHubScene] Item:', item?.name || 'undefined')
     console.log('[OperationsHubScene] Active tab:', this.activeTab)
 
-    // Navigate to the appropriate existing scene with the item data
-    const sceneMap = {
-      crime: 'CrimeScene',
-      jobs: 'JobScene',
-      heists: 'HeistsScene'
+    // Execute directly based on tab type - no more intermediate scenes!
+    switch (this.activeTab) {
+      case 'jobs':
+        this.executeJob(item)
+        break
+      case 'crime':
+        this.executeCrime(item)
+        break
+      case 'heists':
+        this.executeHeist(item)
+        break
+      default:
+        console.error('[OperationsHubScene] Unknown tab:', this.activeTab)
     }
+  }
 
-    const targetScene = sceneMap[this.activeTab]
-    console.log(`[OperationsHubScene] Target scene: ${targetScene}`)
+  /**
+   * Execute a job directly with mini-game support
+   */
+  executeJob(job) {
+    console.log('[OperationsHubScene] Executing job:', job.name)
 
-    if (!targetScene) {
-      console.error('[OperationsHubScene] ERROR: No target scene for tab:', this.activeTab)
+    // Check cooldown
+    if (gameManager.isOnCooldown('job')) {
+      if (this.statsBar) {
+        this.statsBar.showCooldownWarning()
+      }
+      audioManager.playMiss()
       return
     }
 
-    // Clean up before transitioning
+    const player = gameManager.player || getPlayerData() || {}
+    const playerEnergy = player.energy || 100
+    const energyCost = job.energy_cost || job.stamina_cost || 10
+
+    // Check energy
+    if (playerEnergy < energyCost) {
+      if (this.statsBar) {
+        this.statsBar.showWarning(`Need ${energyCost} energy (have ${Math.floor(playerEnergy)})`)
+      }
+      audioManager.playMiss()
+      return
+    }
+
+    // Check if this job has a mini-game
+    const mapping = getJobMapping(job.id)
+    console.log(`[OperationsHubScene] Job ${job.id} - mapping:`, mapping ? 'found' : 'NOT FOUND', ', has_minigame:', job.has_minigame)
+
+    if (mapping) {
+      this.launchJobMiniGame(job, mapping)
+    } else {
+      console.warn(`[OperationsHubScene] No mini-game mapping for job: ${job.id}, using working animation`)
+      this.showWorkingAnimation(job, 'job')
+    }
+  }
+
+  /**
+   * Launch mini-game for a job
+   */
+  launchJobMiniGame(job, mapping) {
+    console.log(`[OperationsHubScene] Launching job mini-game: ${job.id}`)
+
+    const playerLevel = gameManager.player?.level || 1
+    const baseDifficulty = mapping.difficulty || 1
+    const difficulty = Math.min(5, baseDifficulty + Math.floor(playerLevel / 10))
+
+    const gameData = {
+      crimeId: job.id,
+      crimeName: job.name,
+      gameType: mapping.gameType,
+      difficulty,
+      timeLimit: mapping.timeLimit,
+      targetScore: mapping.targetScore,
+      perfectScore: mapping.perfectScore,
+      theme: mapping.theme,
+      returnScene: 'OperationsHubScene',
+      returnData: {
+        tab: 'jobs',
+        itemType: 'job',
+        itemData: job  // Pass job data for reward processing
+      },
+      isJob: true,
+      jobData: job,
+      // Note: onComplete callback won't work since scene is stopped
+      // Rewards are processed in OperationsHubScene.init() using miniGameResult
+      difficultyTier: { name: 'Worker', color: '#22c55e' },
+      rewardMultiplier: 1 + (playerLevel * 0.05),
+      baseCashReward: job.base_pay || 50,
+      baseXpReward: job.xp_reward || 10
+    }
+
+    const sceneKey = getSceneKeyForGame(mapping.gameType)
+
+    if (!this.scene.get(sceneKey)) {
+      console.error(`[OperationsHubScene] Mini-game scene not found: ${sceneKey}`)
+      this.showWorkingAnimation(job, 'job')
+      return
+    }
+
+    // Store for return
+    this.pendingItem = job
+    this.pendingType = 'job'
+
+    // Clean up
     if (this.statsBar) {
       this.statsBar.destroy()
       this.statsBar = null
     }
 
-    // Resume UIScene before transitioning - original scenes expect it to be active
+    // Launch mini-game
+    console.log(`[OperationsHubScene] Starting mini-game: ${sceneKey}`)
+    this.scene.stop()
+    this.scene.start(sceneKey, gameData)
+  }
+
+  /**
+   * Handle job completion (from mini-game or working animation)
+   */
+  handleJobComplete(result, job) {
+    console.log('[OperationsHubScene] Job completed:', result)
+
+    const player = gameManager.player || getPlayerData() || {}
+    const basePay = job.base_pay || 50
+    const baseXp = job.xp_reward || 10
+    const bonusMultiplier = result?.bonusMultiplier || 1
+
+    let cashEarned = 0
+    let xpEarned = 0
+
+    if (result?.success !== false) {
+      cashEarned = Math.floor(basePay * bonusMultiplier)
+      xpEarned = Math.floor(baseXp * bonusMultiplier)
+
+      if (result?.perfectRun) {
+        cashEarned = Math.floor(cashEarned * 1.5)
+        xpEarned = Math.floor(xpEarned * 1.5)
+      }
+    } else {
+      cashEarned = Math.floor(basePay * 0.2)
+      xpEarned = Math.floor(baseXp * 0.3)
+    }
+
+    // Apply rewards
+    player.cash = (player.cash || 0) + cashEarned
+    player.totalEarnings = (player.totalEarnings || 0) + cashEarned
+    player.xp = (player.xp || 0) + xpEarned
+    player.jobs_completed = (player.jobs_completed || 0) + 1
+
+    // Deduct energy
+    const energyCost = job.energy_cost || job.stamina_cost || 10
+    player.energy = Math.max(0, (player.energy || 100) - energyCost)
+
+    // Check for level up
+    const oldLevel = player.level || 1
+    const newLevel = Math.floor(Math.sqrt((player.xp || 0) / 100)) + 1
+
+    if (newLevel > oldLevel) {
+      player.level = newLevel
+      networkMessageManager.createSystemMessage(
+        `LEVEL ${newLevel} ACHIEVED`,
+        `Your work ethic has paid off. New opportunities may be available.`
+      )
+    }
+
+    // Save
+    if (gameManager.player) {
+      Object.assign(gameManager.player, player)
+    }
+    savePlayerData(player)
+
+    // Set cooldown
+    const cooldown = (job.duration_seconds || 60) * 1000
+    gameManager.setCooldown('job', cooldown)
+  }
+
+  /**
+   * Execute a crime directly with mini-game support
+   */
+  executeCrime(crime) {
+    console.log('[OperationsHubScene] Executing crime:', crime.name)
+
+    // Check cooldown
+    if (gameManager.isOnCooldown('crime')) {
+      if (this.statsBar) {
+        this.statsBar.showCooldownWarning()
+      }
+      audioManager.playMiss()
+      return
+    }
+
+    const player = gameManager.player || getPlayerData() || {}
+    const playerEnergy = player.energy || 100
+    const energyCost = crime.energy_cost || 10
+
+    if (playerEnergy < energyCost) {
+      if (this.statsBar) {
+        this.statsBar.showWarning(`Need ${energyCost} energy (have ${Math.floor(playerEnergy)})`)
+      }
+      audioManager.playMiss()
+      return
+    }
+
+    // Check for mini-game
+    const mapping = getCrimeMapping(crime.id)
+    console.log(`[OperationsHubScene] Crime ${crime.id} - mapping:`, mapping ? 'found' : 'NOT FOUND', ', has_minigame:', crime.has_minigame)
+
+    if (mapping) {
+      this.launchCrimeMiniGame(crime, mapping)
+    } else {
+      console.warn(`[OperationsHubScene] No mini-game mapping for crime: ${crime.id}, using working animation`)
+      this.showWorkingAnimation(crime, 'crime')
+    }
+  }
+
+  /**
+   * Launch mini-game for a crime
+   */
+  launchCrimeMiniGame(crime, mapping) {
+    console.log(`[OperationsHubScene] Launching crime mini-game: ${crime.id}`)
+
+    const playerLevel = gameManager.player?.level || 1
+    const baseDifficulty = mapping.difficulty || 1
+    const difficulty = Math.min(5, baseDifficulty + Math.floor(playerLevel / 10))
+
+    const gameData = {
+      crimeId: crime.id,
+      crimeName: crime.name,
+      gameType: mapping.gameType,
+      difficulty,
+      timeLimit: mapping.timeLimit,
+      targetScore: mapping.targetScore,
+      perfectScore: mapping.perfectScore,
+      theme: mapping.theme,
+      returnScene: 'OperationsHubScene',
+      returnData: {
+        tab: 'crime',
+        itemType: 'crime',
+        itemData: crime  // Pass crime data for reward processing
+      },
+      isCrime: true,
+      crimeData: crime,
+      // Note: onComplete callback won't work since scene is stopped
+      // Rewards are processed in OperationsHubScene.init() using miniGameResult
+      difficultyTier: { name: crime.tier || 'petty', color: '#ef4444' },
+      rewardMultiplier: 1 + (playerLevel * 0.05),
+      baseCashReward: crime.max_payout || 100,
+      baseXpReward: crime.xp_reward || 10
+    }
+
+    const sceneKey = getSceneKeyForCrime(mapping.gameType)
+
+    if (!this.scene.get(sceneKey)) {
+      console.error(`[OperationsHubScene] Mini-game scene not found: ${sceneKey}`)
+      this.showWorkingAnimation(crime, 'crime')
+      return
+    }
+
+    this.pendingItem = crime
+    this.pendingType = 'crime'
+
+    if (this.statsBar) {
+      this.statsBar.destroy()
+      this.statsBar = null
+    }
+
+    console.log(`[OperationsHubScene] Starting mini-game: ${sceneKey}`)
+    this.scene.stop()
+    this.scene.start(sceneKey, gameData)
+  }
+
+  /**
+   * Handle crime completion
+   */
+  handleCrimeComplete(result, crime) {
+    console.log('[OperationsHubScene] Crime completed:', result)
+
+    const player = gameManager.player || getPlayerData() || {}
+    const successRate = crime.base_success_rate || 70
+    const bonusMultiplier = result?.bonusMultiplier || 1
+
+    let cashEarned = 0
+    let xpEarned = 0
+    let heatGained = 0
+
+    // Determine success
+    const isSuccess = result?.success !== false && (result?.success || Math.random() * 100 < successRate * bonusMultiplier)
+
+    if (isSuccess) {
+      const minPay = crime.min_payout || 20
+      const maxPay = crime.max_payout || 100
+      cashEarned = Math.floor((minPay + Math.random() * (maxPay - minPay)) * bonusMultiplier)
+      xpEarned = Math.floor((crime.xp_reward || 10) * bonusMultiplier)
+      heatGained = crime.heat_gain || 5
+
+      if (result?.perfectRun) {
+        cashEarned = Math.floor(cashEarned * 1.5)
+        xpEarned = Math.floor(xpEarned * 1.5)
+        heatGained = Math.floor(heatGained * 0.7)
+      }
+    } else {
+      xpEarned = Math.floor((crime.xp_reward || 10) * 0.2)
+      heatGained = Math.floor((crime.heat_gain || 5) * 1.5)
+    }
+
+    // Apply rewards
+    player.cash = (player.cash || 0) + cashEarned
+    player.totalEarnings = (player.totalEarnings || 0) + cashEarned
+    player.xp = (player.xp || 0) + xpEarned
+    player.heat = Math.min(100, (player.heat || 0) + heatGained)
+    player.crimes_committed = (player.crimes_committed || 0) + 1
+
+    // Deduct energy
+    const energyCost = crime.energy_cost || 10
+    player.energy = Math.max(0, (player.energy || 100) - energyCost)
+
+    // Check level up
+    const oldLevel = player.level || 1
+    const newLevel = Math.floor(Math.sqrt((player.xp || 0) / 100)) + 1
+    if (newLevel > oldLevel) {
+      player.level = newLevel
+    }
+
+    // Save
+    if (gameManager.player) {
+      Object.assign(gameManager.player, player)
+    }
+    savePlayerData(player)
+
+    // Set cooldown
+    gameManager.setCooldown('crime', 30000)
+  }
+
+  /**
+   * Process mini-game result when returning from a mini-game
+   * This is called instead of the onComplete callback since the scene was stopped
+   */
+  processMiniGameResult() {
+    console.log('[OperationsHubScene] Processing mini-game result')
+    console.log('[OperationsHubScene] Result:', this.miniGameResult)
+    console.log('[OperationsHubScene] Item type:', this.returnedItemType)
+    console.log('[OperationsHubScene] Item data:', this.returnedItemData)
+
+    const result = this.miniGameResult
+    const itemType = this.returnedItemType
+    const itemData = this.returnedItemData
+
+    if (!result || !itemData) {
+      console.warn('[OperationsHubScene] Missing result or item data')
+      return
+    }
+
+    // Apply rewards based on item type
+    if (itemType === 'job') {
+      this.handleJobComplete(result, itemData)
+    } else if (itemType === 'crime') {
+      this.handleCrimeComplete(result, itemData)
+    }
+
+    // Show result overlay
+    this.showMiniGameResultOverlay(result, itemType, itemData)
+
+    // Clear the stored data
+    this.miniGameResult = null
+    this.returnedItemType = null
+    this.returnedItemData = null
+    this.returningFromMiniGame = false
+  }
+
+  /**
+   * Show a result overlay after mini-game completion
+   */
+  showMiniGameResultOverlay(result, itemType, itemData) {
+    const { width, height } = this.cameras.main
+    const success = result.success !== false
+
+    // Clear content first
+    this.clearContent()
+
+    // Create overlay
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.85)
+      .setDepth(DEPTH.CLOSE_BUTTON + 20)
+      .setInteractive()
+    this.contentItems.push(overlay)
+
+    // Result panel
+    const panelColor = success ? COLORS.network.primary : COLORS.status.danger
+    const panelBg = this.add.rectangle(width / 2, height / 2, 320, 280, COLORS.bg.panel, 0.98)
+      .setStrokeStyle(3, panelColor, 0.9)
+      .setDepth(DEPTH.CLOSE_BUTTON + 21)
+    this.contentItems.push(panelBg)
+
+    // Result icon
+    const icon = success ? (result.perfectRun ? '💎' : '✓') : '✗'
+    const iconColor = success ? (result.perfectRun ? '#ffd700' : toHexString(COLORS.network.primary)) : toHexString(COLORS.status.danger)
+    const iconText = this.add.text(width / 2, height / 2 - 90, icon, {
+      fontSize: '48px',
+      color: iconColor
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 22)
+    this.contentItems.push(iconText)
+
+    // Title
+    const titleText = success
+      ? (result.perfectRun ? 'PERFECT!' : 'SUCCESS!')
+      : 'FAILED'
+    const title = this.add.text(width / 2, height / 2 - 40, `${SYMBOLS.system} ${titleText}`, {
+      ...getTerminalStyle('xl'),
+      color: iconColor
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 22)
+    this.contentItems.push(title)
+
+    // Item name
+    const itemName = this.add.text(width / 2, height / 2 - 10, itemData.name, {
+      ...getTerminalStyle('md'),
+      color: toHexString(COLORS.text.muted)
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 22)
+    this.contentItems.push(itemName)
+
+    // Stats
+    let yPos = height / 2 + 25
+    const statsStyle = { ...getTerminalStyle('md'), color: toHexString(COLORS.text.primary) }
+
+    // Score
+    const scoreText = this.add.text(width / 2, yPos, `Score: ${result.score || 0}`, statsStyle)
+      .setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 22)
+    this.contentItems.push(scoreText)
+    yPos += 28
+
+    // Cash earned (calculate based on result)
+    const basePay = itemType === 'job' ? (itemData.base_pay || 50) : (itemData.max_payout || 100)
+    const cashEarned = success ? Math.floor(basePay * (result.bonusMultiplier || 1)) : 0
+    const cashText = this.add.text(width / 2, yPos, `💵 $${cashEarned.toLocaleString()}`, {
+      ...getTerminalStyle('lg'),
+      color: toHexString(COLORS.network.primary)
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 22)
+    this.contentItems.push(cashText)
+    yPos += 28
+
+    // XP earned
+    const baseXp = itemData.xp_reward || 10
+    const xpEarned = success ? Math.floor(baseXp * (result.bonusMultiplier || 1)) : Math.floor(baseXp * 0.2)
+    const xpText = this.add.text(width / 2, yPos, `⚡ +${xpEarned} XP`, {
+      ...getTerminalStyle('md'),
+      color: toHexString(COLORS.status.warning)
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 22)
+    this.contentItems.push(xpText)
+
+    // Continue button
+    const continueBtn = this.add.text(width / 2, height / 2 + 110, `[ ${SYMBOLS.forward} CONTINUE ]`, {
+      ...getTerminalStyle('lg'),
+      color: toHexString(panelColor)
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 22)
+      .setInteractive({ useHandCursor: true })
+    this.contentItems.push(continueBtn)
+
+    continueBtn.on('pointerover', () => {
+      continueBtn.setColor(toHexString(COLORS.network.glow))
+    })
+    continueBtn.on('pointerout', () => {
+      continueBtn.setColor(toHexString(panelColor))
+    })
+    continueBtn.on('pointerdown', () => {
+      audioManager.playClick()
+      this.clearContent()
+      this.loadContent()
+    })
+
+    // Also close on overlay click
+    overlay.on('pointerdown', () => {
+      audioManager.playClick()
+      this.clearContent()
+      this.loadContent()
+    })
+
+    // Play sound
+    if (success) {
+      if (result.perfectRun) {
+        audioManager.playPerfect()
+      } else {
+        audioManager.playCashGain(cashEarned)
+      }
+    } else {
+      audioManager.playMiss()
+    }
+  }
+
+  /**
+   * Execute a heist - still goes to HeistsScene for planning (heists are complex)
+   */
+  executeHeist(heist) {
+    console.log('[OperationsHubScene] Launching heist planning:', heist.name)
+
+    // Heists require planning, so we still use the separate scene
+    if (this.statsBar) {
+      this.statsBar.destroy()
+      this.statsBar = null
+    }
+
     try {
       this.scene.resume('UIScene')
-      console.log('[OperationsHubScene] Resumed UIScene')
-    } catch (e) {
-      console.error('[OperationsHubScene] Failed to resume UIScene:', e)
+    } catch (e) {}
+
+    this.scene.start('HeistsScene', { selectedItem: heist })
+  }
+
+  /**
+   * Show working animation for jobs/crimes without mini-games
+   */
+  showWorkingAnimation(item, type) {
+    const { width, height } = this.cameras.main
+
+    // Clear all existing content to prevent interference
+    this.clearContent()
+
+    // Create overlay
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7)
+      .setDepth(DEPTH.CLOSE_BUTTON + 10)
+    this.contentItems.push(overlay)
+
+    const workingBg = this.add.rectangle(width / 2, height / 2, 300, 150, COLORS.bg.panel, 0.95)
+      .setStrokeStyle(2, COLORS.network.primary, 0.5)
+      .setDepth(DEPTH.CLOSE_BUTTON + 11)
+    this.contentItems.push(workingBg)
+
+    const actionText = type === 'job' ? 'EXECUTING CONTRACT...' : 'COMMITTING CRIME...'
+    const workingText = this.add.text(width / 2, height / 2 - 20, `${SYMBOLS.system} ${actionText}`, {
+      ...getTerminalStyle('lg'),
+      color: toHexString(COLORS.network.primary)
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 12)
+    this.contentItems.push(workingText)
+
+    const progressBg = this.add.rectangle(width / 2, height / 2 + 30, 200, 20, COLORS.bg.void)
+      .setStrokeStyle(1, COLORS.network.dim, 0.5)
+      .setDepth(DEPTH.CLOSE_BUTTON + 11)
+    this.contentItems.push(progressBg)
+
+    const progressBar = this.add.rectangle(width / 2 - 100, height / 2 + 30, 0, 20, COLORS.network.primary)
+      .setOrigin(0, 0.5)
+      .setDepth(DEPTH.CLOSE_BUTTON + 12)
+    this.contentItems.push(progressBar)
+
+    // Animate progress
+    this.tweens.add({
+      targets: progressBar,
+      width: 200,
+      duration: 1500,
+      ease: 'Linear',
+      onComplete: () => {
+        if (type === 'job') {
+          this.completeJobAnimation(item, workingText, progressBg, progressBar, overlay, workingBg)
+        } else {
+          this.completeCrimeAnimation(item, workingText, progressBg, progressBar, overlay, workingBg)
+        }
+      }
+    })
+  }
+
+  /**
+   * Complete job animation and show results
+   */
+  completeJobAnimation(job, workingText, progressBg, progressBar, overlay, workingBg) {
+    const { width, height } = this.cameras.main
+    const player = gameManager.player || getPlayerData() || {}
+
+    // Execute job
+    const basePay = job.base_pay || 50
+    const timeAdjusted = applyTimeModifierToJob ? applyTimeModifierToJob(basePay) : { adjustedPay: basePay }
+    const levelBonus = Math.floor((player.level || 1) * 5)
+    const cashEarned = Math.floor(timeAdjusted.adjustedPay * (1 + levelBonus / 100))
+    const xpEarned = job.xp_reward || Math.floor(basePay * 0.2)
+
+    // Apply rewards
+    this.handleJobComplete({ success: true, bonusMultiplier: 1 }, job)
+
+    // Play sound
+    audioManager.playCashGain(cashEarned)
+
+    // Update UI
+    workingText.setText(`${SYMBOLS.check} CONTRACT COMPLETE`)
+    progressBar.destroy()
+    progressBg.destroy()
+
+    notificationManager.setScene(this)
+
+    const earnedText = this.add.text(width / 2, height / 2 + 20, `EARNED ${formatMoney(cashEarned)}`, {
+      ...getTerminalStyle('md'),
+      color: toHexString(COLORS.text.gold)
+    }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 12)
+    this.contentItems.push(earnedText)
+
+    notificationManager.showCashGain(width / 2 - 30, height / 2 - 10, cashEarned)
+    this.time.delayedCall(200, () => {
+      notificationManager.showXPGain(width / 2 + 30, height / 2 - 10, xpEarned)
+    })
+
+    // Auto-reload after delay
+    this.time.delayedCall(2000, () => {
+      this.loadContent()
+    })
+  }
+
+  /**
+   * Complete crime animation and show results
+   */
+  completeCrimeAnimation(crime, workingText, progressBg, progressBar, overlay, workingBg) {
+    const { width, height } = this.cameras.main
+    const player = gameManager.player || getPlayerData() || {}
+
+    // Determine success
+    const successRate = crime.base_success_rate || 70
+    const isSuccess = Math.random() * 100 < successRate
+
+    let cashEarned = 0
+    let heatGained = crime.heat_gain || 5
+
+    if (isSuccess) {
+      const minPay = crime.min_payout || 20
+      const maxPay = crime.max_payout || 100
+      cashEarned = Math.floor(minPay + Math.random() * (maxPay - minPay))
+      this.handleCrimeComplete({ success: true, bonusMultiplier: 1 }, crime)
+      audioManager.playCashGain(cashEarned)
+      workingText.setText(`${SYMBOLS.check} CRIME SUCCESSFUL`)
+    } else {
+      this.handleCrimeComplete({ success: false }, crime)
+      audioManager.playMiss()
+      workingText.setText(`${SYMBOLS.close} CRIME FAILED`)
+      workingText.setColor('#EF4444')
     }
 
-    // DO NOT resume GameScene here - keep it paused with input disabled
-    // The target scene will handle returning to GameScene when done
+    progressBar.destroy()
+    progressBg.destroy()
 
-    // Use scene.start() for cleaner transition to sub-scenes
-    // This stops the current scene and starts the target scene
-    console.log(`[OperationsHubScene] About to call scene.start(${targetScene})`)
-    try {
-      this.scene.start(targetScene, { selectedItem: item })
-      console.log(`[OperationsHubScene] scene.start() completed successfully`)
-    } catch (error) {
-      console.error('[OperationsHubScene] ERROR calling scene.start():', error)
-      console.error('[OperationsHubScene] Error stack:', error.stack)
+    notificationManager.setScene(this)
+
+    if (isSuccess) {
+      const earnedText = this.add.text(width / 2, height / 2 + 20, `SCORED ${formatMoney(cashEarned)}`, {
+        ...getTerminalStyle('md'),
+        color: toHexString(COLORS.text.gold)
+      }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 12)
+      this.contentItems.push(earnedText)
+
+      notificationManager.showCashGain(width / 2, height / 2 - 10, cashEarned)
+    } else {
+      const failText = this.add.text(width / 2, height / 2 + 20, `+${heatGained} HEAT`, {
+        ...getTerminalStyle('md'),
+        color: '#EF4444'
+      }).setOrigin(0.5).setDepth(DEPTH.CLOSE_BUTTON + 12)
+      this.contentItems.push(failText)
     }
+
+    // Auto-reload
+    this.time.delayedCall(2000, () => {
+      this.loadContent()
+    })
   }
 
   closeScene() {
