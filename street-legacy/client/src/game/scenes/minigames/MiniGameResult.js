@@ -75,23 +75,29 @@ export class MiniGameResult extends Phaser.Scene {
   }
 
   setupEmergencyExit() {
-    console.log('[MiniGameResult] Setting up emergency exit')
+    console.log('[MiniGameResult] Setting up emergency exit (delayed)')
 
-    // Capture game reference immediately
+    // Capture references immediately
     const game = this.game
+    const gameData = this.gameData
+    const self = this
 
     // Helper function to safely exit
     const safeExit = () => {
       console.log('[MiniGameResult] Safe exit triggered')
-      if (this.isFinishing) return
-      this.isFinishing = true
+      if (self.isFinishing) return
+      self.isFinishing = true
+
+      // Use correct return scene from gameData
+      const returnScene = gameData?.returnScene || 'CrimeScene'
+      console.log('[MiniGameResult] Exiting to:', returnScene)
 
       try {
         // Try normal scene transition first
         if (game && game.scene) {
           game.scene.stop('MiniGameResult')
-          game.scene.start('CrimeScene')
-          console.log('[MiniGameResult] Exited via game.scene')
+          game.scene.start(returnScene, { miniGameResult: self.result, ...gameData?.returnData })
+          console.log('[MiniGameResult] Exited via game.scene to', returnScene)
           return
         }
       } catch (e) {
@@ -100,7 +106,7 @@ export class MiniGameResult extends Phaser.Scene {
 
       try {
         // Try this.scene as fallback
-        this.scene.start('CrimeScene')
+        self.scene.start(returnScene, { miniGameResult: self.result, ...gameData?.returnData })
         console.log('[MiniGameResult] Exited via this.scene')
         return
       } catch (e) {
@@ -112,40 +118,45 @@ export class MiniGameResult extends Phaser.Scene {
       window.location.reload()
     }
 
-    // Multiple exit mechanisms for reliability
+    // CRITICAL: Delay input handlers to prevent immediate dismissal
+    // User may still have finger down from mini-game, so wait for scene to render
+    const SAFE_DELAY = 800 // 800ms delay before enabling exit handlers
 
-    // 1. Phaser input (if available)
-    try {
-      this.input.once('pointerdown', safeExit)
-    } catch (e) {
-      console.warn('[MiniGameResult] Failed to set up Phaser input:', e)
-    }
+    this.safeExitTimeout = setTimeout(() => {
+      if (self.isFinishing) return
+      console.log('[MiniGameResult] Exit handlers now active')
 
-    // 2. DOM click handler as backup
-    const clickHandler = () => {
-      console.log('[MiniGameResult] DOM click emergency exit')
-      document.removeEventListener('click', clickHandler)
-      document.removeEventListener('touchstart', clickHandler)
-      safeExit()
-    }
-    document.addEventListener('click', clickHandler, { once: true })
-    document.addEventListener('touchstart', clickHandler, { once: true })
+      // 1. Phaser input (if available)
+      try {
+        self.input.once('pointerdown', safeExit)
+      } catch (e) {
+        console.warn('[MiniGameResult] Failed to set up Phaser input:', e)
+      }
 
-    // 3. Keyboard handler
-    const keyHandler = (e) => {
-      if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
-        console.log('[MiniGameResult] Keyboard emergency exit')
-        document.removeEventListener('keydown', keyHandler)
+      // 2. DOM click handler as backup - but NOT touchstart (too sensitive)
+      self.domClickHandler = () => {
+        console.log('[MiniGameResult] DOM click exit')
+        document.removeEventListener('click', self.domClickHandler)
         safeExit()
       }
-    }
-    document.addEventListener('keydown', keyHandler)
+      document.addEventListener('click', self.domClickHandler, { once: true })
 
-    // 4. Auto-exit after 8 seconds as final failsafe
+      // 3. Keyboard handler
+      self.keyHandler = (e) => {
+        if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
+          console.log('[MiniGameResult] Keyboard exit')
+          document.removeEventListener('keydown', self.keyHandler)
+          safeExit()
+        }
+      }
+      document.addEventListener('keydown', self.keyHandler)
+    }, SAFE_DELAY)
+
+    // 4. Auto-exit after 15 seconds as final failsafe (increased from 8s)
     this.emergencyTimeout = setTimeout(() => {
-      console.log('[MiniGameResult] Auto emergency exit after 8s')
+      console.log('[MiniGameResult] Auto emergency exit after 15s')
       safeExit()
-    }, 8000)
+    }, 15000)
   }
 
   _createInternal() {
@@ -1714,12 +1725,26 @@ export class MiniGameResult extends Phaser.Scene {
       this.emergencyTimeout = null
     }
 
+    // Clear safe exit delay timeout
+    if (this.safeExitTimeout) {
+      clearTimeout(this.safeExitTimeout)
+      this.safeExitTimeout = null
+    }
+
     // Clear DOM click handler
     if (this.domClickHandler) {
       try {
         document.removeEventListener('click', this.domClickHandler)
       } catch (e) {}
       this.domClickHandler = null
+    }
+
+    // Clear keyboard handler
+    if (this.keyHandler) {
+      try {
+        document.removeEventListener('keydown', this.keyHandler)
+      } catch (e) {}
+      this.keyHandler = null
     }
 
     // Clean up particles
