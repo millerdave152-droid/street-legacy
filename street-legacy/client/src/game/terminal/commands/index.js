@@ -8,6 +8,9 @@ import { registerSystemCommands } from './SystemCommands'
 import { registerNavigationCommands } from './NavigationCommands'
 import { registerSarahCommands } from './SarahCommands'
 import { registerNPCCommands } from './NPCCommands'
+import { registerContactCommands } from './ContactCommands'
+import { registerReputationCommands } from './ReputationCommands'
+import { registerDefenseCommands } from './DefenseCommands'
 import { terminalNPCManager } from '../../managers/TerminalNPCManager'
 
 // Adventure commands register on import
@@ -37,6 +40,15 @@ export function registerAllCommands() {
 
   // NPC terminal opportunity system
   registerNPCCommands()
+
+  // Named NPC contact commands
+  registerContactCommands()
+
+  // Reputation and intel commands
+  registerReputationCommands()
+
+  // Defense commands (lawyer, hideout, payoff)
+  registerDefenseCommands()
 
   // Initialize NPC manager for random messages
   terminalNPCManager.initialize()
