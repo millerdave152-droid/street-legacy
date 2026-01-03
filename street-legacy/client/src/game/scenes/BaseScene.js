@@ -327,30 +327,37 @@ export class BaseScene extends Phaser.Scene {
 
   /**
    * Create a back button in top-left corner
+   * Specs: position (20,20), rgba(0,0,0,0.6) bg, white border, red hover
    * @param {Function} onClick - Optional click handler (default: goBack)
    * @returns {Phaser.GameObjects.Container}
    */
   createBackButton(onClick = null) {
     const btn = this.add.container(20, 20).setDepth(DEPTH.CLOSE_BUTTON)
 
-    // Semi-transparent background pill
-    const bg = this.add.rectangle(40, 0, 90, 32, 0x000000, 0.5)
+    // Background: rgba(0,0,0,0.6), padding 8px 16px, border 1px white 0.3
+    const bg = this.add.rectangle(50, 16, 100, 32, 0x000000, 0.6)
+      .setStrokeStyle(1, 0xffffff, 0.3)
       .setInteractive({ useHandCursor: true })
 
     // Terminal-style text: "← BACK"
-    const label = this.add.text(40, 0, '← BACK', {
+    const label = this.add.text(50, 16, '← BACK', {
       ...getTerminalStyle('sm'),
-      fontStyle: 'bold'
+      fontStyle: 'bold',
+      color: '#ffffff'
     }).setOrigin(0.5)
 
     btn.add([bg, label])
 
     bg.on('pointerover', () => {
-      bg.setFillStyle(0xff0000, 0.3)
+      bg.setFillStyle(0xff0000, 0.4)
+      bg.setStrokeStyle(1, 0xffffff, 0.5)
       audioManager.playHover()
     })
 
-    bg.on('pointerout', () => bg.setFillStyle(0x000000, 0.5))
+    bg.on('pointerout', () => {
+      bg.setFillStyle(0x000000, 0.6)
+      bg.setStrokeStyle(1, 0xffffff, 0.3)
+    })
 
     bg.on('pointerdown', () => {
       audioManager.playClick()
