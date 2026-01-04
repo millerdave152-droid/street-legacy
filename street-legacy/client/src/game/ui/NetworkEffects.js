@@ -220,6 +220,338 @@ class NetworkEffectsManager {
   }
 
   /**
+   * Matrix Rain Effect - Falling green characters
+   * @param {number} duration - Effect duration in ms
+   * @param {Object} options - Configuration options
+   */
+  matrixRain(duration = 3000, options = {}) {
+    if (!this.scene) return
+
+    const { width, height } = this.scene.cameras.main
+    const columnWidth = options.columnWidth || 20
+    const speed = options.speed || 200
+    const density = options.density || 0.7
+    const color = options.color || '#00ff41'
+
+    const columns = Math.ceil(width / columnWidth)
+    const chars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEF'
+    const rainDrops = []
+    const rainContainer = this.scene.add.container(0, 0)
+    rainContainer.setDepth(9998)
+
+    // Create rain columns
+    for (let col = 0; col < columns; col++) {
+      if (Math.random() > density) continue
+
+      const x = col * columnWidth + columnWidth / 2
+      const startY = -Math.random() * height
+      const length = Math.floor(Math.random() * 15) + 5
+
+      const column = []
+      for (let i = 0; i < length; i++) {
+        const char = chars[Math.floor(Math.random() * chars.length)]
+        const alpha = 1 - (i / length)
+        const text = this.scene.add.text(x, startY + i * 18, char, {
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: '14px',
+          color: i === 0 ? '#ffffff' : color,
+          alpha: alpha
+        }).setOrigin(0.5)
+        column.push(text)
+        rainContainer.add(text)
+      }
+
+      rainDrops.push({
+        column,
+        x,
+        y: startY,
+        speed: speed + Math.random() * 100
+      })
+    }
+
+    // Animate rain
+    const updateEvent = this.scene.time.addEvent({
+      delay: 50,
+      callback: () => {
+        rainDrops.forEach(drop => {
+          drop.y += drop.speed * 0.05
+          drop.column.forEach((text, i) => {
+            text.y = drop.y + i * 18
+
+            // Randomly change characters
+            if (Math.random() > 0.9) {
+              text.setText(chars[Math.floor(Math.random() * chars.length)])
+            }
+
+            // Wrap around
+            if (text.y > height + 100) {
+              text.y = -100
+              drop.y = -100
+            }
+          })
+        })
+      },
+      loop: true
+    })
+
+    // Stop after duration
+    this.scene.time.delayedCall(duration, () => {
+      updateEvent.remove()
+
+      // Fade out
+      this.scene.tweens.add({
+        targets: rainContainer,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => rainContainer.destroy()
+      })
+    })
+
+    return rainContainer
+  }
+
+  /**
+   * Dramatic Glitch Effect - RGB split + heavy distortion
+   * For betrayals, raids, and major events
+   * @param {number} duration - Effect duration in ms
+   * @param {Object} options - Configuration options
+   */
+  dramaticGlitch(duration = 500, options = {}) {
+    if (!this.scene) return
+
+    const { width, height } = this.scene.cameras.main
+    const intensity = options.intensity || 1
+    const rgbSplit = options.rgbSplit !== false
+    const sound = options.sound !== false
+
+    const glitchContainer = this.scene.add.container(0, 0)
+    glitchContainer.setDepth(10000)
+
+    // RGB Split overlay
+    if (rgbSplit) {
+      const redOverlay = this.scene.add.rectangle(
+        width / 2 - 3 * intensity, height / 2, width, height,
+        0xff0000, 0.15
+      )
+      const blueOverlay = this.scene.add.rectangle(
+        width / 2 + 3 * intensity, height / 2, width, height,
+        0x0000ff, 0.15
+      )
+      glitchContainer.add([redOverlay, blueOverlay])
+
+      // Animate RGB split
+      this.scene.tweens.add({
+        targets: redOverlay,
+        x: width / 2 - 8 * intensity,
+        duration: 50,
+        yoyo: true,
+        repeat: Math.floor(duration / 100)
+      })
+      this.scene.tweens.add({
+        targets: blueOverlay,
+        x: width / 2 + 8 * intensity,
+        duration: 50,
+        yoyo: true,
+        repeat: Math.floor(duration / 100)
+      })
+    }
+
+    // Heavy distortion slices
+    const sliceCount = 8 + Math.floor(intensity * 4)
+    const slices = []
+
+    for (let i = 0; i < sliceCount; i++) {
+      const sliceY = Math.random() * height
+      const sliceHeight = Math.random() * 30 + 10
+      const offset = (Math.random() - 0.5) * 40 * intensity
+
+      const slice = this.scene.add.rectangle(
+        width / 2 + offset,
+        sliceY,
+        width,
+        sliceHeight,
+        Math.random() > 0.3 ? 0xff0000 : (Math.random() > 0.5 ? 0x00ff00 : 0x0000ff),
+        0.4
+      )
+      slices.push(slice)
+      glitchContainer.add(slice)
+    }
+
+    // Animate slices
+    slices.forEach((slice, index) => {
+      this.scene.tweens.add({
+        targets: slice,
+        x: slice.x + (Math.random() - 0.5) * 60,
+        alpha: { from: 0.4, to: 0 },
+        duration: duration / 2,
+        delay: index * 20,
+        yoyo: true
+      })
+    })
+
+    // Screen shake effect
+    const originalX = this.scene.cameras.main.scrollX
+    const originalY = this.scene.cameras.main.scrollY
+
+    this.scene.tweens.add({
+      targets: this.scene.cameras.main,
+      scrollX: originalX + 5 * intensity,
+      scrollY: originalY + 3 * intensity,
+      duration: 30,
+      yoyo: true,
+      repeat: Math.floor(duration / 60),
+      onComplete: () => {
+        this.scene.cameras.main.scrollX = originalX
+        this.scene.cameras.main.scrollY = originalY
+      }
+    })
+
+    // Horizontal scan lines
+    const scanContainer = this.scene.add.container(0, 0)
+    glitchContainer.add(scanContainer)
+
+    for (let i = 0; i < 5; i++) {
+      const scanY = Math.random() * height
+      const scan = this.scene.add.rectangle(
+        width / 2,
+        scanY,
+        width,
+        2,
+        0xffffff,
+        0.8
+      )
+      scanContainer.add(scan)
+
+      this.scene.tweens.add({
+        targets: scan,
+        y: scanY + (Math.random() - 0.5) * 100,
+        alpha: 0,
+        duration: duration / 3,
+        delay: i * 50
+      })
+    }
+
+    // Flash effect
+    const flash = this.scene.add.rectangle(
+      width / 2, height / 2, width, height, 0xffffff, 0.3
+    )
+    glitchContainer.add(flash)
+
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 100
+    })
+
+    // Cleanup
+    this.scene.time.delayedCall(duration + 100, () => {
+      glitchContainer.destroy()
+    })
+
+    return glitchContainer
+  }
+
+  /**
+   * Access Granted Flash - Green screen flash for success
+   * @param {number} duration - Flash duration in ms
+   */
+  accessGrantedFlash(duration = 300) {
+    if (!this.scene) return
+
+    const { width, height } = this.scene.cameras.main
+
+    const flash = this.scene.add.rectangle(
+      width / 2, height / 2, width, height,
+      0x00ff41, 0.4
+    ).setDepth(10000)
+
+    // Text overlay
+    const text = this.scene.add.text(
+      width / 2, height / 2,
+      'ACCESS GRANTED',
+      {
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: '28px',
+        color: '#00ff41',
+        fontStyle: 'bold'
+      }
+    ).setOrigin(0.5).setDepth(10001).setAlpha(0)
+
+    this.scene.tweens.add({
+      targets: text,
+      alpha: 1,
+      y: height / 2 - 10,
+      duration: 150,
+      onComplete: () => {
+        this.scene.tweens.add({
+          targets: text,
+          alpha: 0,
+          duration: 150,
+          delay: 100
+        })
+      }
+    })
+
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: duration,
+      onComplete: () => {
+        flash.destroy()
+        text.destroy()
+      }
+    })
+  }
+
+  /**
+   * Access Denied Flash - Red screen flash for failure
+   * @param {number} duration - Flash duration in ms
+   */
+  accessDeniedFlash(duration = 300) {
+    if (!this.scene) return
+
+    const { width, height } = this.scene.cameras.main
+
+    const flash = this.scene.add.rectangle(
+      width / 2, height / 2, width, height,
+      0xff0000, 0.4
+    ).setDepth(10000)
+
+    const text = this.scene.add.text(
+      width / 2, height / 2,
+      'ACCESS DENIED',
+      {
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: '28px',
+        color: '#ff0000',
+        fontStyle: 'bold'
+      }
+    ).setOrigin(0.5).setDepth(10001).setAlpha(0)
+
+    this.scene.tweens.add({
+      targets: text,
+      alpha: 1,
+      y: height / 2 - 10,
+      duration: 150,
+      yoyo: true,
+      hold: 100
+    })
+
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: duration,
+      onComplete: () => {
+        flash.destroy()
+        text.destroy()
+      }
+    })
+
+    // Add shake
+    this.scene.cameras.main.shake(200, 0.01)
+  }
+
+  /**
    * Trigger a glitch effect
    * @param {number} duration - Effect duration in ms
    */

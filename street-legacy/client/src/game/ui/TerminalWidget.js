@@ -10,6 +10,7 @@ import { terminalManager, OUTPUT_TYPES } from '../managers/TerminalManager'
 import { registerAllCommands } from '../terminal/commands'
 import { COLORS, DEPTH, LAYOUT, getTerminalStyle, toHexString, SYMBOLS } from './NetworkTheme'
 import { parseClickables, hasClickables, getPlainText } from '../terminal/ClickableParser'
+import { intelligenceCoordinator } from '../intelligence/IntelligenceCoordinator'
 
 // Terminal color mapping
 const OUTPUT_COLORS = {
@@ -75,9 +76,15 @@ export class TerminalWidget {
     // Phase 12: Clickable shortcuts
     this.clickableLinks = []  // Store clickable regions
 
+    // Ghost text for predictions
+    this.ghostText = null
+    this.hintPanel = null
+    this.currentPredictions = null
+
     // Listener cleanup
     this.unsubscribe = null
     this.keyboardListener = null
+    this.intelligenceUnsubscribe = null
   }
 
   /**
@@ -168,10 +175,16 @@ export class TerminalWidget {
     // Mobile command bar
     this.createMobileBar()
 
+    // Hint panel for context-aware suggestions
+    this.createHintPanel()
+
     // Subscribe to terminal updates
     this.unsubscribe = terminalManager.addListener((event, data) => {
       this.handleTerminalEvent(event, data)
     })
+
+    // Subscribe to intelligence predictions
+    this.initializeIntelligence()
 
     // Set up keyboard input
     this.setupKeyboardInput()
@@ -180,6 +193,124 @@ export class TerminalWidget {
     this.renderOutput()
 
     return this
+  }
+
+  /**
+   * Create hint panel for context-aware suggestions
+   */
+  createHintPanel() {
+    const hintY = this.y + this.height + 5
+
+    this.hintPanel = this.scene.add.container(this.x, hintY)
+    this.container.add(this.hintPanel)
+
+    // Background
+    this.hintBg = this.scene.add.rectangle(
+      this.width / 2,
+      10,
+      this.width,
+      20,
+      COLORS.bg.panel,
+      0.7
+    ).setStrokeStyle(1, COLORS.network.dim, 0.3)
+    this.hintPanel.add(this.hintBg)
+
+    // Hint text
+    this.hintText = this.scene.add.text(
+      10,
+      10,
+      '',
+      {
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: '9px',
+        color: toHexString(COLORS.text.muted)
+      }
+    ).setOrigin(0, 0.5)
+    this.hintPanel.add(this.hintText)
+
+    // Initially hidden
+    this.hintPanel.setVisible(false)
+  }
+
+  /**
+   * Initialize intelligence system integration
+   */
+  initializeIntelligence() {
+    try {
+      // Initialize the intelligence coordinator
+      intelligenceCoordinator.initialize()
+
+      // Subscribe to prediction updates
+      this.intelligenceUnsubscribe = intelligenceCoordinator.addListener((event, data) => {
+        if (event === 'predictions') {
+          this.handlePredictions(data)
+        }
+      })
+    } catch (e) {
+      console.warn('[TerminalWidget] Intelligence system not available:', e.message)
+    }
+  }
+
+  /**
+   * Handle prediction updates from intelligence system
+   */
+  handlePredictions(predictions) {
+    this.currentPredictions = predictions
+
+    // Update ghost text
+    this.updateGhostText(predictions.autocomplete)
+
+    // Update hint panel
+    this.updateHintPanel(predictions.hints)
+  }
+
+  /**
+   * Update ghost text with prediction
+   */
+  updateGhostText(autocomplete) {
+    if (!this.ghostText) return
+
+    const input = terminalManager.getInput()
+
+    if (!input || input.length === 0 || !autocomplete || autocomplete.length === 0) {
+      this.ghostText.setText('')
+      return
+    }
+
+    const topPrediction = autocomplete[0]
+    if (topPrediction && topPrediction.text.toLowerCase().startsWith(input.toLowerCase())) {
+      // Show ghost completion
+      this.ghostText.setText(topPrediction.text)
+    } else {
+      this.ghostText.setText('')
+    }
+  }
+
+  /**
+   * Update hint panel with context hints
+   */
+  updateHintPanel(hints) {
+    if (!this.hintPanel || !this.hintText) return
+
+    if (!hints || hints.length === 0) {
+      this.hintPanel.setVisible(false)
+      return
+    }
+
+    // Show top hint
+    const topHint = hints[0]
+    this.hintText.setText(`${SYMBOLS.info} ${topHint.hint} → type "${topHint.cmd}"`)
+    this.hintPanel.setVisible(true)
+
+    // Auto-hide after delay
+    if (this.hintHideTimer) {
+      this.hintHideTimer.remove()
+    }
+    this.hintHideTimer = this.scene.time.delayedCall(8000, () => {
+      if (this.hintPanel) {
+        this.hintPanel.setVisible(false)
+      }
+    })
   }
 
   /**
@@ -292,6 +423,25 @@ export class TerminalWidget {
       yoyo: true,
       repeat: -1
     })
+
+    // Ghost text for predictions (rendered behind actual text)
+    this.ghostText = this.scene.add.text(
+      this.x + 22,
+      inputY,
+      '',
+      {
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: '11px',
+        color: '#444444',  // Dim gray for ghost text
+        alpha: 0.6
+      }
+    ).setOrigin(0, 0.5)
+    this.container.add(this.ghostText)
+
+    // Move ghost text behind input text
+    this.container.sendToBack(this.ghostText)
+    this.container.bringToTop(this.inputText)
+    this.container.bringToTop(this.cursor)
   }
 
   /**
@@ -625,6 +775,11 @@ export class TerminalWidget {
     const cursorX = this.x + 22 + (textBeforeCursor.length * 6.6) // Approximate char width
 
     this.cursor.setX(cursorX)
+
+    // Update ghost text based on current predictions
+    if (this.currentPredictions?.autocomplete) {
+      this.updateGhostText(this.currentPredictions.autocomplete)
+    }
   }
 
   /**
@@ -707,8 +862,19 @@ export class TerminalWidget {
       this.scene.input.keyboard.off('keydown', this.keyboardListener)
     }
 
+    // Clean up intelligence subscription
+    if (this.intelligenceUnsubscribe) {
+      this.intelligenceUnsubscribe()
+    }
+    intelligenceCoordinator.endSession()
+
     // Phase 12: Clean up clickable links
     this.clearClickableLinks()
+
+    // Destroy hint panel
+    if (this.hintPanel) {
+      this.hintPanel.destroy()
+    }
 
     // Destroy container
     if (this.container) {
