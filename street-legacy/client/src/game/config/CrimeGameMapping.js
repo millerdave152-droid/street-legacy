@@ -17,7 +17,9 @@ export const MINI_GAME_TYPES = {
   HACKING: 'hacking',
   GETAWAY: 'getaway',
   NEGOTIATION: 'negotiation',
-  SURVEILLANCE: 'surveillance'
+  SURVEILLANCE: 'surveillance',
+  STEALTH: 'stealth',
+  DISGUISE: 'disguise'
 }
 
 const COLORS = {
@@ -1566,11 +1568,11 @@ export const CRIME_GAME_MAPPINGS = {
   cat_burglary: {
     crimeId: 'cat_burglary',
     crimeName: 'Cat Burglary',
-    gameType: MINI_GAME_TYPES.FROGGER,
+    gameType: MINI_GAME_TYPES.STEALTH,
     difficulty: 4,
     timeLimit: 50,
-    targetScore: 6,
-    perfectScore: 9,
+    targetScore: 200,
+    perfectScore: 350,
     theme: {
       primaryColor: 0x1e293b,
       secondaryColor: 0x0f172a,
@@ -1579,7 +1581,65 @@ export const CRIME_GAME_MAPPINGS = {
       backgroundColor: 0x000000,
       icon: '🐱'
     },
-    description: 'Stealth through security!'
+    description: 'Navigate past guards unseen!'
+  },
+
+  // Social engineering with disguise
+  impersonation: {
+    crimeId: 'impersonation',
+    crimeName: 'Identity Impersonation',
+    gameType: MINI_GAME_TYPES.DISGUISE,
+    difficulty: 3,
+    timeLimit: 45,
+    targetScore: 300,
+    perfectScore: 500,
+    theme: {
+      primaryColor: 0x06b6d4,
+      secondaryColor: 0x0891b2,
+      dangerColor: COLORS.RED,
+      successColor: COLORS.SUCCESS,
+      backgroundColor: COLORS.DARK,
+      icon: '🎭'
+    },
+    description: 'Maintain your cover identity!'
+  },
+
+  infiltration: {
+    crimeId: 'infiltration',
+    crimeName: 'Corporate Infiltration',
+    gameType: MINI_GAME_TYPES.STEALTH,
+    difficulty: 4,
+    timeLimit: 60,
+    targetScore: 250,
+    perfectScore: 400,
+    theme: {
+      primaryColor: 0x3b82f6,
+      secondaryColor: 0x2563eb,
+      dangerColor: COLORS.RED,
+      successColor: COLORS.SUCCESS,
+      backgroundColor: COLORS.DARK,
+      icon: '🏢'
+    },
+    description: 'Infiltrate the secure facility!'
+  },
+
+  social_engineering: {
+    crimeId: 'social_engineering',
+    crimeName: 'Social Engineering',
+    gameType: MINI_GAME_TYPES.DISGUISE,
+    difficulty: 3,
+    timeLimit: 40,
+    targetScore: 250,
+    perfectScore: 400,
+    theme: {
+      primaryColor: 0x8b5cf6,
+      secondaryColor: 0x7c3aed,
+      dangerColor: COLORS.RED,
+      successColor: COLORS.SUCCESS,
+      backgroundColor: COLORS.DARK,
+      icon: '🗣️'
+    },
+    description: 'Talk your way past security!'
   }
 }
 
@@ -1630,7 +1690,9 @@ export function getSceneKeyForGame(gameType) {
     [MINI_GAME_TYPES.HACKING]: 'HackingGame',
     [MINI_GAME_TYPES.GETAWAY]: 'GetawayGame',
     [MINI_GAME_TYPES.NEGOTIATION]: 'NegotiationGame',
-    [MINI_GAME_TYPES.SURVEILLANCE]: 'SurveillanceGame'
+    [MINI_GAME_TYPES.SURVEILLANCE]: 'SurveillanceGame',
+    [MINI_GAME_TYPES.STEALTH]: 'StealthGame',
+    [MINI_GAME_TYPES.DISGUISE]: 'DisguiseGame'
   }
   return sceneMap[gameType] || 'QTEGame' // Default to QTE
 }

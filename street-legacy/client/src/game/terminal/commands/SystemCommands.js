@@ -14,6 +14,272 @@ const tutorialState = {
   completedSteps: new Set()
 }
 
+// Terminal-specific tutorial state
+const terminalTutorialState = {
+  active: false,
+  step: 0,
+  completed: false
+}
+
+// Terminal tutorial steps - focused on console commands
+const TERMINAL_TUTORIAL_STEPS = [
+  {
+    title: 'THE CONSOLE Intro',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 1/10: Welcome to THE CONSOLE', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  This is THE CONSOLE - your command center.', type: 'response' },
+      { text: '  Everything in Street Legacy can be controlled from here.', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  Commands are typed at the > prompt.', type: 'response' },
+      { text: '  Press ENTER to execute.', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'Basic Commands',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 2/10: Basic Commands', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  Essential commands you need to know:', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  status (or s)  - Check your stats', type: 'success' },
+      { text: '  help (or h)    - See all commands', type: 'success' },
+      { text: '  clear          - Clean the screen', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Try typing: status', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'Navigation',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 3/10: Navigation', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  Move around the game with "go":', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  go ops      - Operations Hub', type: 'success' },
+      { text: '  go trade    - Commerce Hub', type: 'success' },
+      { text: '  go crime    - Crime Scene directly', type: 'success' },
+      { text: '  home        - Return to dashboard', type: 'success' },
+      { text: '  back        - Previous location', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Type "go" alone to see all locations.', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'S.A.R.A.H. AI Assistant',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 4/10: S.A.R.A.H.', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  S.A.R.A.H. is your AI assistant.', type: 'response' },
+      { text: '  Street Autonomous Response & Assistance Hub', type: 'handler' },
+      { text: '', type: 'response' },
+      { text: '  Ask her anything:', type: 'response' },
+      { text: '  ask what crime should I do?', type: 'success' },
+      { text: '  ask how do I reduce heat?', type: 'success' },
+      { text: '  advice - Get quick tips', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  She understands natural language!', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'Opportunities',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 5/10: Opportunities', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  NPCs will send you opportunities:', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  opportunities    - List active offers', type: 'success' },
+      { text: '  respond 1 yes    - Accept opportunity #1', type: 'success' },
+      { text: '  respond 1 no     - Decline opportunity #1', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Watch for incoming [NPC] messages!', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'Banking Commands',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 6/10: Money Management', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  Manage your cash from the terminal:', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  balance       - Check all money', type: 'success' },
+      { text: '  deposit 500   - Save $500 to bank', type: 'success' },
+      { text: '  deposit all   - Save everything', type: 'success' },
+      { text: '  withdraw 500  - Get $500 from bank', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Shorthand: 5k = 5000, 1m = 1000000', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'NPC Contacts',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 7/10: Contacts', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  Interact with NPCs:', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  contacts     - List your contacts', type: 'success' },
+      { text: '  msg Marcus   - Message an NPC', type: 'success' },
+      { text: '  intel        - Gather street intel', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Build relationships for better deals!', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'Keyboard Shortcuts',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 8/10: Keyboard Power', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  Master these shortcuts:', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  Tab          - Autocomplete commands', type: 'success' },
+      { text: '  Up/Down      - Browse command history', type: 'success' },
+      { text: '  PageUp/Down  - Scroll output', type: 'success' },
+      { text: '  Escape       - Unfocus terminal', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Type "keys" to see all shortcuts.', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'Natural Language',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 9/10: Talk Naturally', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  S.A.R.A.H. understands natural language:', type: 'response' },
+      { text: '', type: 'response' },
+      { text: '  "take me to the bank"  -> go bank', type: 'success' },
+      { text: '  "what crime pays best" -> crime advice', type: 'success' },
+      { text: '  "how am I doing?"      -> status analysis', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Just type naturally - she gets it!', type: 'warning' },
+      { text: '', type: 'response' },
+      { text: '  Type "tutorial term next" to continue...', type: 'system' },
+    ]
+  },
+  {
+    title: 'Tutorial Complete',
+    content: [
+      { text: ':: TERMINAL TUTORIAL - Step 10/10: You\'re Ready!', type: 'system' },
+      { text: '', type: 'response' },
+      { text: '  You now know THE CONSOLE!', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Key commands to remember:', type: 'response' },
+      { text: '  - status, help, go, back, home', type: 'handler' },
+      { text: '  - ask, advice, opportunities', type: 'handler' },
+      { text: '  - deposit, withdraw, balance', type: 'handler' },
+      { text: '', type: 'response' },
+      { text: ':: TERMINAL TUTORIAL COMPLETE!', type: 'success' },
+      { text: '  +$100 bonus added to your cash!', type: 'success' },
+      { text: '', type: 'response' },
+      { text: '  Type "help" anytime for assistance.', type: 'system' },
+    ],
+    reward: true,
+    rewardAmount: 100
+  }
+]
+
+/**
+ * Handle terminal-specific tutorial commands
+ */
+function handleTerminalTutorial(subcommand, args, terminal) {
+  switch (subcommand) {
+    case 'start':
+    case 'begin':
+      terminalTutorialState.active = true
+      terminalTutorialState.step = 0
+      return { output: TERMINAL_TUTORIAL_STEPS[0].content }
+
+    case 'next':
+    case 'continue':
+    case 'n':
+      if (!terminalTutorialState.active) {
+        return { error: true, message: 'No terminal tutorial in progress. Type "tutorial term" to start.' }
+      }
+      terminalTutorialState.step++
+      if (terminalTutorialState.step >= TERMINAL_TUTORIAL_STEPS.length) {
+        terminalTutorialState.active = false
+        terminalTutorialState.completed = true
+        return { output: [{ text: ':: Terminal tutorial already completed!', type: 'system' }] }
+      }
+      const nextStep = TERMINAL_TUTORIAL_STEPS[terminalTutorialState.step]
+      // Award reward on last step
+      if (nextStep.reward && nextStep.rewardAmount && gameManager.addCash) {
+        gameManager.addCash(nextStep.rewardAmount)
+      }
+      return { output: nextStep.content }
+
+    case 'skip':
+    case 'stop':
+    case 'exit':
+      terminalTutorialState.active = false
+      return {
+        output: [
+          { text: ':: Terminal tutorial skipped', type: 'system' },
+          { text: '  Type "tutorial term" anytime to restart.', type: 'response' },
+        ]
+      }
+
+    case 'step':
+      const stepNum = parseInt(args[0])
+      if (isNaN(stepNum) || stepNum < 1 || stepNum > TERMINAL_TUTORIAL_STEPS.length) {
+        return { error: true, message: `Step must be 1-${TERMINAL_TUTORIAL_STEPS.length}` }
+      }
+      terminalTutorialState.active = true
+      terminalTutorialState.step = stepNum - 1
+      return { output: TERMINAL_TUTORIAL_STEPS[stepNum - 1].content }
+
+    case 'status':
+      return {
+        output: [
+          { text: ':: Terminal Tutorial Status', type: 'system' },
+          { text: `  Active: ${terminalTutorialState.active ? 'Yes' : 'No'}`, type: 'response' },
+          { text: `  Step: ${terminalTutorialState.step + 1}/${TERMINAL_TUTORIAL_STEPS.length}`, type: 'response' },
+          { text: `  Completed: ${terminalTutorialState.completed ? 'Yes' : 'No'}`, type: 'response' },
+        ]
+      }
+
+    case 'reset':
+      terminalTutorialState.active = false
+      terminalTutorialState.step = 0
+      terminalTutorialState.completed = false
+      return {
+        output: [
+          { text: ':: Terminal tutorial reset', type: 'system' },
+          { text: '  Type "tutorial term" to start fresh.', type: 'response' },
+        ]
+      }
+
+    default:
+      // If first arg is a number, jump to that step
+      const num = parseInt(subcommand)
+      if (!isNaN(num) && num >= 1 && num <= TERMINAL_TUTORIAL_STEPS.length) {
+        terminalTutorialState.active = true
+        terminalTutorialState.step = num - 1
+        return { output: TERMINAL_TUTORIAL_STEPS[num - 1].content }
+      }
+
+      // Otherwise start from beginning
+      terminalTutorialState.active = true
+      terminalTutorialState.step = 0
+      return { output: TERMINAL_TUTORIAL_STEPS[0].content }
+  }
+}
+
 /**
  * Register all system commands
  */
@@ -236,6 +502,12 @@ export function registerSystemCommands() {
     aliases: ['tut', 'learn', 'guide', 'onboard'],
     handler: async ({ args, terminal }) => {
       const subcommand = (args[0] || 'start').toLowerCase()
+
+      // Handle terminal-specific tutorial
+      if (subcommand === 'term' || subcommand === 'terminal' || subcommand === 'console') {
+        const termSubcmd = (args[1] || 'start').toLowerCase()
+        return handleTerminalTutorial(termSubcmd, args.slice(2), terminal)
+      }
 
       // Tutorial steps
       const steps = [

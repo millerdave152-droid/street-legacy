@@ -176,7 +176,9 @@ export function cancelMiniGame() {
     const miniGameScenes = [
       'SnakeGame', 'LockPickGame', 'QTEGame', 'FroggerGame',
       'MemoryGame', 'SteadyHandGame', 'ChaseGame', 'SniperGame',
-      'SafeCrackGame', 'WireGame', 'MiniGameResult'
+      'SafeCrackGame', 'WireGame', 'RhythmGame', 'HackingGame',
+      'GetawayGame', 'NegotiationGame', 'SurveillanceGame',
+      'StealthGame', 'DisguiseGame', 'MiniGameResult'
     ]
 
     miniGameScenes.forEach(sceneKey => {
@@ -203,7 +205,9 @@ export function isMiniGameActive() {
   const miniGameScenes = [
     'SnakeGame', 'LockPickGame', 'QTEGame', 'FroggerGame',
     'MemoryGame', 'SteadyHandGame', 'ChaseGame', 'SniperGame',
-    'SafeCrackGame', 'WireGame', 'MiniGameResult'
+    'SafeCrackGame', 'WireGame', 'RhythmGame', 'HackingGame',
+    'GetawayGame', 'NegotiationGame', 'SurveillanceGame',
+    'StealthGame', 'DisguiseGame', 'MiniGameResult'
   ]
 
   return miniGameScenes.some(sceneKey => game.scene.isActive(sceneKey))

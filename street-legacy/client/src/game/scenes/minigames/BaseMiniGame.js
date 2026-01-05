@@ -9,6 +9,37 @@ import { gameManager } from '../../GameManager'
 import { CurveballManager, CURVEBALL_TYPES } from '../../managers/CurveballManager'
 import { COLORS, SYMBOLS, getTerminalStyle, toHexString, BORDERS } from '../../ui/NetworkTheme'
 
+// Difficulty mode configurations
+export const DIFFICULTY_MODES = {
+  EASY: {
+    name: 'Easy',
+    timeMultiplier: 1.3,      // +30% time
+    targetMultiplier: 0.7,     // -30% target
+    curveballChance: 0,        // No curveballs
+    rewardMultiplier: 0.6,     // 0.6x rewards
+    color: '#22c55e',          // Green
+    description: 'More time, easier targets, no curveballs'
+  },
+  NORMAL: {
+    name: 'Normal',
+    timeMultiplier: 1.0,
+    targetMultiplier: 1.0,
+    curveballChance: 1.0,
+    rewardMultiplier: 1.0,
+    color: '#3b82f6',          // Blue
+    description: 'Standard challenge'
+  },
+  HARD: {
+    name: 'Hard',
+    timeMultiplier: 0.75,      // -25% time
+    targetMultiplier: 1.3,     // +30% target
+    curveballChance: 1.5,      // +50% curveballs
+    rewardMultiplier: 1.5,     // 1.5x rewards
+    color: '#ef4444',          // Red
+    description: 'Less time, harder targets, more curveballs'
+  }
+}
+
 export class BaseMiniGame extends Phaser.Scene {
   // Subclasses override this to declare supported curveballs
   static get supportedCurveballs() {
@@ -54,9 +85,12 @@ export class BaseMiniGame extends Phaser.Scene {
   init(data) {
     this.gameData = data
     this.score = 0
-    this.timeRemaining = data.timeLimit || 30
     this.isPaused = false
     this.isGameOver = false
+
+    // Apply difficulty mode if specified
+    this.difficultyMode = data.difficultyMode || DIFFICULTY_MODES.NORMAL
+    this.applyDifficultyModifiers(data)
 
     // Anti-cheat: Track game start time and initial state
     this.gameStartTime = Date.now()
@@ -67,6 +101,33 @@ export class BaseMiniGame extends Phaser.Scene {
     // Get actual game dimensions
     this.gameWidth = this.scale.width
     this.gameHeight = this.scale.height
+  }
+
+  /**
+   * Apply difficulty mode modifiers to game data
+   */
+  applyDifficultyModifiers(data) {
+    const mode = this.difficultyMode
+
+    // Apply time multiplier
+    const baseTime = data.timeLimit || 30
+    this.timeRemaining = Math.round(baseTime * mode.timeMultiplier)
+
+    // Apply target score multiplier
+    if (data.targetScore) {
+      this.gameData.targetScore = Math.round(data.targetScore * mode.targetMultiplier)
+    }
+    if (data.perfectScore) {
+      this.gameData.perfectScore = Math.round(data.perfectScore * mode.targetMultiplier)
+    }
+
+    // Store reward multiplier for end game calculation
+    this.gameData.difficultyRewardMultiplier = mode.rewardMultiplier
+
+    // Store curveball chance modifier
+    this.gameData.curveballChanceMultiplier = mode.curveballChance
+
+    console.log(`[BaseMiniGame] Applied ${mode.name} difficulty: time=${this.timeRemaining}s, target=${this.gameData.targetScore}, rewards=${mode.rewardMultiplier}x`)
   }
 
   create() {
@@ -232,6 +293,19 @@ export class BaseMiniGame extends Phaser.Scene {
       fontSize: '11px',
       color: toHexString(COLORS.status.warning)
     })
+
+    // Difficulty mode badge (if not normal)
+    if (this.difficultyMode && this.difficultyMode.name !== 'Normal') {
+      const modeColor = Phaser.Display.Color.HexStringToColor(this.difficultyMode.color).color
+      const modeBadge = this.add.rectangle(55 + 80, 36, 50, 18, modeColor, 0.2)
+        .setOrigin(0, 0.5)
+        .setStrokeStyle(1, modeColor, 0.8)
+      this.add.text(55 + 105, 36, this.difficultyMode.name.toUpperCase(), {
+        ...getTerminalStyle('xs'),
+        color: this.difficultyMode.color,
+        fontStyle: 'bold'
+      }).setOrigin(0.5)
+    }
 
     // Score display with terminal styling
     this.scoreText = this.add.text(this.gameWidth - 20, 12, `${SYMBOLS.system} SCORE: 0`, {
@@ -528,8 +602,10 @@ export class BaseMiniGame extends Phaser.Scene {
     const perfectScore = this.gameData.perfectScore || (targetScore * 1.5)
     const perfectRun = this.score >= perfectScore
 
-    // Apply reward multiplier from progressive difficulty
-    const difficultyRewardMult = this.gameData.rewardMultiplier || 1
+    // Apply reward multiplier from progressive difficulty and difficulty mode
+    const progressiveRewardMult = this.gameData.rewardMultiplier || 1
+    const difficultyModeRewardMult = this.gameData.difficultyRewardMultiplier || 1
+    const totalRewardMult = progressiveRewardMult * difficultyModeRewardMult
 
     let bonusMultiplier = 1
     if (success) {
@@ -538,8 +614,8 @@ export class BaseMiniGame extends Phaser.Scene {
       if (perfectRun) {
         bonusMultiplier *= 1.5
       }
-      // Apply difficulty reward multiplier
-      bonusMultiplier *= difficultyRewardMult
+      // Apply combined reward multipliers
+      bonusMultiplier *= totalRewardMult
     } else {
       bonusMultiplier = 0.3
     }
@@ -557,7 +633,8 @@ export class BaseMiniGame extends Phaser.Scene {
       bonusMultiplier: Math.round(bonusMultiplier * 100) / 100,
       crimeId: this.gameData.crimeId,
       difficultyTier: this.gameData.difficultyTier,
-      rewardMultiplier: difficultyRewardMult,
+      difficultyMode: this.difficultyMode?.name || 'Normal',
+      rewardMultiplier: totalRewardMult,
       validated: true,
       curveballsSurvived // Track curveballs for stats
     }
@@ -686,7 +763,8 @@ export class BaseMiniGame extends Phaser.Scene {
         const miniGameScenes = ['SnakeGame', 'LockPickGame', 'QTEGame', 'FroggerGame',
                                 'MemoryGame', 'SteadyHandGame', 'ChaseGame', 'SniperGame',
                                 'SafeCrackGame', 'WireGame', 'RhythmGame', 'HackingGame',
-                                'GetawayGame', 'NegotiationGame', 'SurveillanceGame']
+                                'GetawayGame', 'NegotiationGame', 'SurveillanceGame',
+                                'StealthGame', 'DisguiseGame']
         miniGameScenes.forEach(key => {
           try {
             if (game.scene.isActive(key)) {
