@@ -14,6 +14,7 @@ import { gameManager } from '../GameManager'
 import { terminalManager, OUTPUT_TYPES } from '../managers/TerminalManager'
 import { opportunityScheduler } from './OpportunityScheduler'
 import { relationshipTracker } from './RelationshipTracker'
+import { audioManager } from '../managers/AudioManager'
 
 // Opportunity types
 export const OPPORTUNITY_TYPES = {
@@ -273,14 +274,14 @@ class OpportunityManagerClass {
     }
 
     // Handle different opportunity types
-    let result = { success: true, opportunity }
+    let result = { success: true, opportunity, rewards: opportunity.rewards }
 
     switch (opportunity.type) {
       case OPPORTUNITY_TYPES.NPC_JOB:
         result.message = this.handleJobAccept(opportunity)
         break
       case OPPORTUNITY_TYPES.TRADE_DEAL:
-        result = this.handleTradeAccept(opportunity)
+        result = { ...result, ...this.handleTradeAccept(opportunity) }
         break
       case OPPORTUNITY_TYPES.ALLIANCE:
         result.message = this.handleAllianceAccept(opportunity)
@@ -414,6 +415,10 @@ class OpportunityManagerClass {
     if (consequences.cash) {
       const amount = isRisk ? -Math.abs(consequences.cash) : consequences.cash
       gameManager.updatePlayerCash(amount)
+      // Play audio feedback for cash changes
+      if (amount > 0) {
+        audioManager.playCashGain(amount)
+      }
     }
 
     if (consequences.heat) {
@@ -423,6 +428,10 @@ class OpportunityManagerClass {
 
     if (consequences.xp) {
       gameManager.addExperience(consequences.xp)
+      // Play level up sound if XP is significant
+      if (consequences.xp >= 50) {
+        audioManager.playAchievement()
+      }
     }
 
     if (consequences.respect) {

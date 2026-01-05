@@ -9,6 +9,7 @@ import { inputRouter } from '../terminal/InputRouter'
 import { conversationalSarah } from '../sarah/ConversationalSarah'
 import { adventureEngine } from '../adventure/AdventureEngine'
 import { opportunityManager } from '../opportunity/OpportunityManager'
+import { audioManager } from './AudioManager'
 
 // Output line types for styling
 export const OUTPUT_TYPES = {
@@ -64,6 +65,9 @@ class TerminalManager {
 
     // Scroll state
     this.scrollOffset = 0
+
+    // Display options
+    this.showTimestamps = false
 
     // Scene listeners for UI updates
     this.listeners = []
@@ -166,7 +170,10 @@ class TerminalManager {
 
     switch (key) {
       case 'Enter':
-        this.executeCurrentInput()
+        // Execute async and catch any errors
+        this.executeCurrentInput().catch(err => {
+          console.error('[TerminalManager] executeCurrentInput error:', err)
+        })
         break
 
       case 'Backspace':
@@ -211,18 +218,36 @@ class TerminalManager {
         break
 
       case 'Home':
-        this.cursorPosition = 0
-        this.notifyListeners('cursor', { cursor: this.cursorPosition })
+        if (event && event.ctrlKey) {
+          // Ctrl+Home: scroll to top
+          this.scrollToTop()
+        } else {
+          this.cursorPosition = 0
+          this.notifyListeners('cursor', { cursor: this.cursorPosition })
+        }
         break
 
       case 'End':
-        this.cursorPosition = this.inputBuffer.length
-        this.notifyListeners('cursor', { cursor: this.cursorPosition })
+        if (event && event.ctrlKey) {
+          // Ctrl+End: scroll to bottom
+          this.scrollToBottom()
+        } else {
+          this.cursorPosition = this.inputBuffer.length
+          this.notifyListeners('cursor', { cursor: this.cursorPosition })
+        }
         break
 
       case 'Tab':
         this.handleAutocomplete()
         if (event) event.preventDefault()
+        break
+
+      case 'PageUp':
+        this.scrollOutput(5)  // Scroll up (increase offset)
+        break
+
+      case 'PageDown':
+        this.scrollOutput(-5)  // Scroll down (decrease offset)
         break
 
       case 'Escape':
@@ -301,9 +326,20 @@ class TerminalManager {
    * Uses InputRouter for smart command vs conversation detection
    */
   async executeCurrentInput() {
+    console.log('[TerminalManager] executeCurrentInput called, buffer:', this.inputBuffer)
     const input = this.inputBuffer.trim()
 
-    if (!input) return
+    if (!input) {
+      console.log('[TerminalManager] Empty input, returning')
+      return
+    }
+
+    // TEMPORARY DEBUG: Show alert to confirm execution
+    console.log('[TerminalManager] Processing input:', input)
+    console.log('[TerminalManager] outputBuffer length before:', this.outputBuffer.length)
+
+    // Play command submit sound
+    audioManager.playClick()
 
     // Add to history
     if (this.commandHistory[0] !== input) {
@@ -326,6 +362,7 @@ class TerminalManager {
     // Route input through smart classification
     try {
       const routing = await inputRouter.route(input, this)
+      console.log('[TerminalManager] Input routed as:', routing.type, routing)
 
       switch (routing.type) {
         case 'adventure':
@@ -337,6 +374,7 @@ class TerminalManager {
             })
           }
           if (advResult.error) {
+            audioManager.playError()
             this.addOutput(advResult.error, OUTPUT_TYPES.ERROR)
           }
           break
@@ -346,6 +384,7 @@ class TerminalManager {
           const oppData = routing.data
           const opp = opportunityManager.getOpportunityByIndex(oppData.index)
           if (!opp) {
+            audioManager.playError()
             this.addOutput(`No opportunity #${oppData.index} found. Type 'opportunities' to see available.`, OUTPUT_TYPES.ERROR)
           } else if (!oppData.response) {
             // Just viewing the opportunity
@@ -366,6 +405,7 @@ class TerminalManager {
                 }
               }
             } else {
+              audioManager.playError()
               this.addOutput(oppResult.error || 'Failed to respond.', OUTPUT_TYPES.ERROR)
             }
           }
@@ -387,7 +427,9 @@ class TerminalManager {
         case 'conversation':
         case 'ambiguous':
           // Conversational query - S.A.R.A.H. handles it
+          console.log('[TerminalManager] Routing to S.A.R.A.H.')
           const response = await conversationalSarah.processInput(input, this)
+          console.log('[TerminalManager] S.A.R.A.H. response:', response)
           this.handleSarahResponse(response)
           break
 
@@ -402,6 +444,7 @@ class TerminalManager {
       }
     } catch (error) {
       console.error('[TerminalManager] Input processing error:', error)
+      audioManager.playError()
       this.addOutput(`Error: ${error.message}`, OUTPUT_TYPES.ERROR)
     }
   }
@@ -410,26 +453,38 @@ class TerminalManager {
    * Execute a direct command (internal helper)
    */
   async executeDirectCommand(commandString) {
+    console.log('[TerminalManager] executeDirectCommand:', commandString)
     try {
       const parsed = parseCommand(commandString)
+      console.log('[TerminalManager] parsed:', parsed)
       const result = await commandRegistry.execute(parsed, this)
+      console.log('[TerminalManager] result:', result)
 
       if (result) {
         if (result.error) {
+          console.log('[TerminalManager] result has error')
+          audioManager.playError()
           this.addOutput(result.message || result.error, OUTPUT_TYPES.ERROR)
         } else if (result.output) {
+          console.log('[TerminalManager] result has output, lines:', result.output.length)
           const lines = Array.isArray(result.output) ? result.output : [result.output]
           lines.forEach(line => {
             if (typeof line === 'object') {
+              console.log('[TerminalManager] adding line:', line.text?.substring(0, 50))
               this.addOutput(line.text, line.type || OUTPUT_TYPES.RESPONSE)
             } else {
               this.addOutput(line, result.type || OUTPUT_TYPES.RESPONSE)
             }
           })
+        } else {
+          console.log('[TerminalManager] result has no output or error')
         }
+      } else {
+        console.log('[TerminalManager] no result returned')
       }
     } catch (error) {
       console.error('[TerminalManager] Command error:', error)
+      audioManager.playError()
       this.addOutput(`Error: ${error.message}`, OUTPUT_TYPES.ERROR)
     }
   }
@@ -473,10 +528,12 @@ class TerminalManager {
    * Long lines are pre-split to prevent rendering issues
    */
   addOutput(text, type = OUTPUT_TYPES.RESPONSE) {
+    console.log('[TerminalManager] addOutput:', text?.substring(0, 60), 'type:', type)
     const timestamp = Date.now()
 
     // Pre-wrap long lines to avoid rendering issues
-    const wrappedLines = wrapText(text, 75)
+    // Use 64 chars to leave room for timestamp prefix "[HH:MM:SS] " (11 chars)
+    const wrappedLines = wrapText(text, 64)
 
     // Add each wrapped line as a separate buffer entry
     for (const lineText of wrappedLines) {
@@ -537,7 +594,88 @@ class TerminalManager {
   scrollOutput(delta) {
     const maxScroll = Math.max(0, this.outputBuffer.length - 10)
     this.scrollOffset = Math.max(0, Math.min(maxScroll, this.scrollOffset + delta))
-    this.notifyListeners('scroll', { offset: this.scrollOffset })
+    this.notifyListeners('scroll', { offset: this.scrollOffset, max: maxScroll })
+  }
+
+  /**
+   * Scroll to top of output
+   */
+  scrollToTop() {
+    const maxScroll = Math.max(0, this.outputBuffer.length - 10)
+    this.scrollOffset = maxScroll
+    this.notifyListeners('scroll', { offset: this.scrollOffset, max: maxScroll })
+  }
+
+  /**
+   * Scroll to bottom of output (most recent)
+   */
+  scrollToBottom() {
+    this.scrollOffset = 0
+    const maxScroll = Math.max(0, this.outputBuffer.length - 10)
+    this.notifyListeners('scroll', { offset: this.scrollOffset, max: maxScroll })
+  }
+
+  /**
+   * Get scroll info for UI indicators
+   */
+  getScrollInfo() {
+    const total = this.outputBuffer.length
+    const maxScroll = Math.max(0, total - 10)
+    return {
+      offset: this.scrollOffset,
+      maxScroll,
+      total,
+      atBottom: this.scrollOffset === 0,
+      atTop: this.scrollOffset >= maxScroll,
+      canScroll: maxScroll > 0
+    }
+  }
+
+  /**
+   * Toggle timestamp display
+   */
+  toggleTimestamps(enable = null) {
+    if (enable === null) {
+      this.showTimestamps = !this.showTimestamps
+    } else {
+      this.showTimestamps = enable
+    }
+    // Save preference
+    try {
+      localStorage.setItem('terminal_show_timestamps', JSON.stringify(this.showTimestamps))
+    } catch (e) {}
+    this.notifyListeners('refresh')
+    return this.showTimestamps
+  }
+
+  /**
+   * Get timestamps setting
+   */
+  getShowTimestamps() {
+    return this.showTimestamps
+  }
+
+  /**
+   * Format timestamp for display
+   */
+  formatTimestamp(timestamp) {
+    const date = new Date(timestamp)
+    const hours = date.getHours().toString().padStart(2, '0')
+    const mins = date.getMinutes().toString().padStart(2, '0')
+    const secs = date.getSeconds().toString().padStart(2, '0')
+    return `[${hours}:${mins}:${secs}]`
+  }
+
+  /**
+   * Load display settings
+   */
+  loadDisplaySettings() {
+    try {
+      const saved = localStorage.getItem('terminal_show_timestamps')
+      if (saved) {
+        this.showTimestamps = JSON.parse(saved)
+      }
+    } catch (e) {}
   }
 
   /**
@@ -624,6 +762,7 @@ class TerminalManager {
   initialize() {
     this.loadHistory()
     this.loadOutput()
+    this.loadDisplaySettings()
     console.log('[TerminalManager] Initialized with', this.outputBuffer.length, 'lines,', this.commandHistory.length, 'history items')
   }
 }
