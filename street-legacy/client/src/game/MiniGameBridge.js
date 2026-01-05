@@ -178,7 +178,7 @@ export function cancelMiniGame() {
       'MemoryGame', 'SteadyHandGame', 'ChaseGame', 'SniperGame',
       'SafeCrackGame', 'WireGame', 'RhythmGame', 'HackingGame',
       'GetawayGame', 'NegotiationGame', 'SurveillanceGame',
-      'StealthGame', 'DisguiseGame', 'MiniGameResult'
+      'StealthGame', 'DisguiseGame', 'SmashGrabGame', 'MiniGameResult'
     ]
 
     miniGameScenes.forEach(sceneKey => {
@@ -207,10 +207,107 @@ export function isMiniGameActive() {
     'MemoryGame', 'SteadyHandGame', 'ChaseGame', 'SniperGame',
     'SafeCrackGame', 'WireGame', 'RhythmGame', 'HackingGame',
     'GetawayGame', 'NegotiationGame', 'SurveillanceGame',
-    'StealthGame', 'DisguiseGame', 'MiniGameResult'
+    'StealthGame', 'DisguiseGame', 'SmashGrabGame', 'MiniGameResult'
   ]
 
   return miniGameScenes.some(sceneKey => game.scene.isActive(sceneKey))
+}
+
+/**
+ * Launch a mini-game in practice mode (no rewards/penalties)
+ * @param {Object} options
+ * @param {string} options.gameType - The mini-game type (e.g., 'qte', 'frogger')
+ * @param {string} options.gameName - Display name for the practice session
+ * @param {number} options.difficulty - Difficulty level (1-5)
+ * @returns {boolean} True if practice mode launched
+ */
+export function launchPracticeMode({ gameType, gameName, difficulty = 1 }) {
+  const game = getGame()
+
+  if (!game) {
+    console.warn('[MiniGameBridge] No Phaser game instance found')
+    return false
+  }
+
+  const sceneKey = getSceneKeyForGame(gameType)
+  if (!sceneKey) {
+    console.warn('[MiniGameBridge] No scene key for game type:', gameType)
+    return false
+  }
+
+  // Build practice mode game data
+  const gameData = {
+    crimeId: 'practice',
+    crimeName: gameName || `Practice: ${gameType}`,
+    gameType,
+    difficulty: Math.min(5, Math.max(1, difficulty)),
+    timeLimit: 60, // Generous time for practice
+    targetScore: 100,
+    perfectScore: 200,
+    practiceMode: true, // Key flag for practice mode
+    theme: {
+      primaryColor: 0x3b82f6,
+      secondaryColor: 0x2563eb,
+      dangerColor: 0xef4444,
+      successColor: 0x10b981,
+      backgroundColor: 0x0a0a0a,
+      icon: '🎯'
+    },
+    returnScene: null
+  }
+
+  console.log('[MiniGameBridge] Launching practice mode:', sceneKey, gameData)
+
+  try {
+    // Check if scene exists
+    if (!game.scene.getScene(sceneKey)) {
+      console.error('[MiniGameBridge] Scene not found:', sceneKey)
+      return false
+    }
+
+    // Stop any currently running game scenes
+    const activeScenes = game.scene.getScenes(true)
+    activeScenes.forEach(scene => {
+      if (scene.scene.key !== 'UIScene' && scene.scene.key !== 'BootScene' && scene.scene.key !== 'PreloadScene') {
+        game.scene.stop(scene.scene.key)
+      }
+    })
+
+    // Start the mini-game scene in practice mode
+    game.scene.start(sceneKey, gameData)
+
+    return true
+  } catch (error) {
+    console.error('[MiniGameBridge] Failed to launch practice mode:', error)
+    return false
+  }
+}
+
+/**
+ * Get list of available mini-game types for practice
+ * @returns {Array<{type: string, name: string, description: string}>}
+ */
+export function getAvailableGames() {
+  return [
+    { type: 'qte', name: 'Quick Time Events', description: 'React quickly to prompts' },
+    { type: 'frogger', name: 'Stealth Navigation', description: 'Navigate past guards' },
+    { type: 'steadyhand', name: 'Steady Hand', description: 'Keep the cursor in the zone' },
+    { type: 'lockpick', name: 'Lock Picking', description: 'Find the sweet spot' },
+    { type: 'memory', name: 'Memory Match', description: 'Remember and match patterns' },
+    { type: 'snake', name: 'Collection Run', description: 'Collect items, avoid obstacles' },
+    { type: 'wire', name: 'Wire Matching', description: 'Connect the correct wires' },
+    { type: 'safecrack', name: 'Safe Cracking', description: 'Crack the combination' },
+    { type: 'chase', name: 'Chase Escape', description: 'Outrun the pursuit' },
+    { type: 'sniper', name: 'Precision Shot', description: 'Time your shot perfectly' },
+    { type: 'hacking', name: 'Hacking', description: 'Type commands quickly' },
+    { type: 'rhythm', name: 'Rhythm', description: 'Keep the beat' },
+    { type: 'getaway', name: 'Getaway Driver', description: 'Escape through traffic' },
+    { type: 'negotiation', name: 'Negotiation', description: 'Choose the right approach' },
+    { type: 'surveillance', name: 'Surveillance', description: 'Spot the details' },
+    { type: 'stealth', name: 'Stealth', description: 'Avoid detection' },
+    { type: 'disguise', name: 'Disguise', description: 'Maintain your cover' },
+    { type: 'smashgrab', name: 'Smash & Grab', description: 'Break in and grab valuables' }
+  ]
 }
 
 export default {
@@ -218,5 +315,7 @@ export default {
   getMiniGameType,
   launchMiniGame,
   cancelMiniGame,
-  isMiniGameActive
+  isMiniGameActive,
+  launchPracticeMode,
+  getAvailableGames
 }

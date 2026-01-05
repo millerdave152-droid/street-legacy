@@ -68,6 +68,7 @@ import { NegotiationGame } from './scenes/minigames/NegotiationGame'
 import { SurveillanceGame } from './scenes/minigames/SurveillanceGame'
 import { StealthGame } from './scenes/minigames/StealthGame'
 import { DisguiseGame } from './scenes/minigames/DisguiseGame'
+import { SmashGrabGame } from './scenes/minigames/SmashGrabGame'
 
 // Casino games
 import { CoinFlipScene } from './scenes/casino/CoinFlipScene'
@@ -282,6 +283,7 @@ export const gameConfig = {
     SurveillanceGame,
     StealthGame,
     DisguiseGame,
+    SmashGrabGame,
 
     // Casino games
     CoinFlipScene,

@@ -88,8 +88,16 @@ export class BaseMiniGame extends Phaser.Scene {
     this.isPaused = false
     this.isGameOver = false
 
+    // Practice mode - allows no-consequence practice
+    this.isPracticeMode = data.practiceMode || false
+
     // Apply difficulty mode if specified
-    this.difficultyMode = data.difficultyMode || DIFFICULTY_MODES.NORMAL
+    // Practice mode defaults to EASY if not specified
+    if (this.isPracticeMode && !data.difficultyMode) {
+      this.difficultyMode = DIFFICULTY_MODES.EASY
+    } else {
+      this.difficultyMode = data.difficultyMode || DIFFICULTY_MODES.NORMAL
+    }
     this.applyDifficultyModifiers(data)
 
     // Anti-cheat: Track game start time and initial state
@@ -170,6 +178,34 @@ export class BaseMiniGame extends Phaser.Scene {
 
     // Fade in
     this.cameras.main.fadeIn(300)
+
+    // Show practice mode indicator
+    if (this.isPracticeMode) {
+      this.createPracticeModeIndicator()
+    }
+  }
+
+  /**
+   * Create practice mode indicator banner
+   */
+  createPracticeModeIndicator() {
+    // Practice mode banner at top
+    const bannerBg = this.add.rectangle(this.gameWidth / 2, 15, this.gameWidth, 24, 0x3b82f6, 0.9)
+      .setDepth(1000)
+
+    const bannerText = this.add.text(this.gameWidth / 2, 15, `${SYMBOLS.info} PRACTICE MODE - No rewards or penalties`, {
+      ...getTerminalStyle('sm'),
+      color: '#ffffff'
+    }).setOrigin(0.5).setDepth(1001)
+
+    // Pulse animation
+    this.tweens.add({
+      targets: [bannerBg, bannerText],
+      alpha: { from: 1, to: 0.7 },
+      duration: 1000,
+      yoyo: true,
+      repeat: -1
+    })
   }
 
   /**
@@ -640,11 +676,17 @@ export class BaseMiniGame extends Phaser.Scene {
     }
 
     // Record minigame result for progressive difficulty tracking
-    try {
-      gameManager.recordMinigameResult(this.gameData.crimeId, result)
-      console.log('[BaseMiniGame] Recorded result to GameManager')
-    } catch (e) {
-      console.warn('[BaseMiniGame] Failed to record result:', e)
+    // Skip recording in practice mode
+    if (!this.isPracticeMode) {
+      try {
+        gameManager.recordMinigameResult(this.gameData.crimeId, result)
+        console.log('[BaseMiniGame] Recorded result to GameManager')
+      } catch (e) {
+        console.warn('[BaseMiniGame] Failed to record result:', e)
+      }
+    } else {
+      console.log('[BaseMiniGame] Practice mode - skipping result recording')
+      result.practiceMode = true
     }
 
     console.log('[BaseMiniGame] Result calculated:', result)
@@ -764,7 +806,7 @@ export class BaseMiniGame extends Phaser.Scene {
                                 'MemoryGame', 'SteadyHandGame', 'ChaseGame', 'SniperGame',
                                 'SafeCrackGame', 'WireGame', 'RhythmGame', 'HackingGame',
                                 'GetawayGame', 'NegotiationGame', 'SurveillanceGame',
-                                'StealthGame', 'DisguiseGame']
+                                'StealthGame', 'DisguiseGame', 'SmashGrabGame']
         miniGameScenes.forEach(key => {
           try {
             if (game.scene.isActive(key)) {

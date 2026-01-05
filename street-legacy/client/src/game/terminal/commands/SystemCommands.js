@@ -834,6 +834,120 @@ export function registerSystemCommands() {
     minLevel: 1,
   })
 
+  // Practice mode command
+  commandRegistry.register({
+    name: 'practice',
+    aliases: ['train', 'practice-mode'],
+    handler: async ({ args, terminal }) => {
+      // Dynamic import to avoid circular dependencies
+      const { launchPracticeMode, getAvailableGames } = await import('../../MiniGameBridge')
+
+      const subcommand = (args[0] || '').toLowerCase()
+
+      // List available games
+      if (!subcommand || subcommand === 'list') {
+        const games = getAvailableGames()
+        const output = [
+          { text: ':: PRACTICE MODE - Mini-Game Training', type: 'system' },
+          { text: '', type: 'response' },
+          { text: '  Practice any mini-game without rewards or penalties!', type: 'response' },
+          { text: '', type: 'response' },
+          { text: '  Available games:', type: 'warning' },
+          { text: '', type: 'response' }
+        ]
+
+        games.forEach((game, i) => {
+          output.push({
+            text: `  ${(i + 1).toString().padStart(2, ' ')}. ${game.name.padEnd(20)} - ${game.description}`,
+            type: 'response'
+          })
+        })
+
+        output.push({ text: '', type: 'response' })
+        output.push({ text: '  Usage: practice <number> [difficulty 1-5]', type: 'success' })
+        output.push({ text: '  Example: practice 1      - Practice QTE (easy)', type: 'handler' })
+        output.push({ text: '  Example: practice 3 3    - Practice Steady Hand (medium)', type: 'handler' })
+
+        return { output }
+      }
+
+      // Launch a specific game
+      const gameNum = parseInt(subcommand)
+      if (isNaN(gameNum)) {
+        // Try to match by name
+        const games = getAvailableGames()
+        const match = games.find(g =>
+          g.type.toLowerCase() === subcommand ||
+          g.name.toLowerCase().includes(subcommand)
+        )
+
+        if (match) {
+          const difficulty = parseInt(args[1]) || 1
+          const launched = launchPracticeMode({
+            gameType: match.type,
+            gameName: `Practice: ${match.name}`,
+            difficulty
+          })
+
+          if (launched) {
+            return {
+              output: [
+                { text: `:: Launching Practice: ${match.name}`, type: 'system' },
+                { text: `  Difficulty: ${difficulty}/5`, type: 'response' },
+                { text: '  No rewards or penalties - learn the mechanics!', type: 'success' }
+              ]
+            }
+          }
+        }
+
+        return {
+          output: [
+            { text: '  Unknown game. Use "practice list" to see available games.', type: 'error' }
+          ]
+        }
+      }
+
+      const games = getAvailableGames()
+      if (gameNum < 1 || gameNum > games.length) {
+        return {
+          output: [
+            { text: `  Invalid game number. Choose 1-${games.length}`, type: 'error' },
+            { text: '  Use "practice list" to see available games.', type: 'warning' }
+          ]
+        }
+      }
+
+      const game = games[gameNum - 1]
+      const difficulty = parseInt(args[1]) || 1
+
+      const launched = launchPracticeMode({
+        gameType: game.type,
+        gameName: `Practice: ${game.name}`,
+        difficulty: Math.min(5, Math.max(1, difficulty))
+      })
+
+      if (launched) {
+        return {
+          output: [
+            { text: `:: Launching Practice: ${game.name}`, type: 'system' },
+            { text: `  Difficulty: ${Math.min(5, Math.max(1, difficulty))}/5`, type: 'response' },
+            { text: '  No rewards or penalties - learn the mechanics!', type: 'success' }
+          ]
+        }
+      } else {
+        return {
+          output: [
+            { text: '  Failed to launch practice mode.', type: 'error' }
+          ]
+        }
+      }
+    },
+    help: 'Practice mini-games without rewards or penalties',
+    usage: 'practice [game_number] [difficulty]',
+    category: CATEGORIES.GENERAL,
+    minLevel: 1,
+  })
+
   console.log('[SystemCommands] Registered system commands')
 }
 

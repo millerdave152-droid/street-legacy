@@ -45,12 +45,19 @@ export class FroggerGame extends BaseMiniGame {
     if (this.gameData.difficulty >= 4) {
       this.gridRows = 7
       this.moveDelay = 100
+      this.collisionRadius = 0.55  // Tighter collision for hard mode
+      this.maxObstaclesPerRow = 2
     } else if (this.gameData.difficulty >= 2) {
       this.gridRows = 6
       this.moveDelay = 125
+      this.collisionRadius = 0.5   // Standard collision
+      this.maxObstaclesPerRow = 2
     } else {
+      // Easy mode (Shoplifting, etc.) - more forgiving
       this.gridRows = 5
       this.moveDelay = 150
+      this.collisionRadius = 0.45  // Forgiving collision radius
+      this.maxObstaclesPerRow = 1  // Fewer guards per row
     }
 
     this.successRow = this.gridRows - 1
@@ -144,12 +151,28 @@ export class FroggerGame extends BaseMiniGame {
   createObstacles() {
     // Create moving obstacles on each row (except start and goal)
     for (let row = 1; row < this.gridRows - 1; row++) {
-      const obstacleCount = Phaser.Math.Between(1, 2)
+      // Use difficulty-scaled obstacle count
+      const obstacleCount = this.maxObstaclesPerRow || Phaser.Math.Between(1, 2)
       const direction = row % 2 === 0 ? 1 : -1
-      const speed = 1 + Math.random() * 1.5 + (this.gameData.difficulty - 1) * 0.3
+
+      // Scale speed with difficulty - easier = slower guards
+      const baseSpeed = this.gameData.difficulty >= 4 ? 1.5 :
+                       this.gameData.difficulty >= 2 ? 1.2 : 0.8
+      const speed = baseSpeed + Math.random() * 0.5 + (this.gameData.difficulty - 1) * 0.2
+
+      // Track used columns to ensure spacing
+      const usedCols = []
 
       for (let i = 0; i < obstacleCount; i++) {
-        const startCol = Phaser.Math.Between(0, this.gridCols - 1)
+        // Find a column with good spacing from other guards
+        let startCol
+        let attempts = 0
+        do {
+          startCol = Phaser.Math.Between(0, this.gridCols - 1)
+          attempts++
+        } while (usedCols.some(col => Math.abs(col - startCol) < 2) && attempts < 10)
+
+        usedCols.push(startCol)
         this.createObstacle(row, startCol, direction, speed)
       }
     }
@@ -379,7 +402,8 @@ export class FroggerGame extends BaseMiniGame {
   checkCollision() {
     const playerX = this.player.x
     const playerY = this.player.y
-    const collisionDist = this.cellSize * 0.6 // Collision radius
+    // Use difficulty-scaled collision radius (default 0.5 if not set)
+    const collisionDist = this.cellSize * (this.collisionRadius || 0.5)
 
     for (const obstacle of this.obstacles) {
       const obstacleRow = obstacle.getData('row')

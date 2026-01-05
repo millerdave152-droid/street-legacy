@@ -32,8 +32,10 @@ export class SteadyHandGame extends BaseMiniGame {
     this.zoneMoveSpeed = 2
     this.zoneDirection = { x: 1, y: 1 }
     this.isInZone = false
+    this.isInGraceZone = false  // Buffer zone at edge
     this.shakeFactor = 0
     this.maxShake = 3
+    this.graceZone = 10  // Default grace zone pixels
 
     // Base values for curveball effects
     this.baseZoneMoveSpeed = 2
@@ -49,25 +51,30 @@ export class SteadyHandGame extends BaseMiniGame {
     this.shakeFactor = 0
     this.successHandled = false
 
-    // Difficulty scaling
+    // Difficulty scaling - balanced for better playability
+    // Zone sizes increased, penalties reduced, grace zone added
     if (this.gameData.difficulty >= 4) {
-      this.zoneSize = 50
-      this.zoneMoveSpeed = 4
-      this.progressSpeed = 12
-      this.penaltySpeed = 35
-      this.maxShake = 5
+      this.zoneSize = 60           // Was 50 - slightly larger
+      this.zoneMoveSpeed = 3       // Was 4 - slower movement
+      this.progressSpeed = 14      // Was 12 - faster progress
+      this.penaltySpeed = 20       // Was 35 - much less punishing
+      this.maxShake = 4            // Was 5
+      this.graceZone = 8           // Buffer zone at edge
     } else if (this.gameData.difficulty >= 2) {
-      this.zoneSize = 65
-      this.zoneMoveSpeed = 3
-      this.progressSpeed = 13
-      this.penaltySpeed = 30
-      this.maxShake = 4
+      this.zoneSize = 75           // Was 65 - larger zone
+      this.zoneMoveSpeed = 2.2     // Was 3 - slower
+      this.progressSpeed = 16      // Was 13 - faster progress
+      this.penaltySpeed = 15       // Was 30 - much less punishing
+      this.maxShake = 3            // Was 4
+      this.graceZone = 10          // Buffer zone at edge
     } else {
-      this.zoneSize = 80
-      this.zoneMoveSpeed = 2
-      this.progressSpeed = 15
-      this.penaltySpeed = 25
-      this.maxShake = 3
+      // Easy mode (Pickpocket, etc.) - very forgiving
+      this.zoneSize = 90           // Was 80 - larger target
+      this.zoneMoveSpeed = 1.5     // Was 2 - slower, easier to track
+      this.progressSpeed = 18      // Was 15 - faster completion
+      this.penaltySpeed = 10       // Was 25 - gentle penalty
+      this.maxShake = 2            // Was 3 - less shaky
+      this.graceZone = 12          // Buffer zone at edge
     }
 
     // Store base values for curveball effects
@@ -337,7 +344,11 @@ export class SteadyHandGame extends BaseMiniGame {
     )
 
     const wasInZone = this.isInZone
+    const wasInGraceZone = this.isInGraceZone
+
+    // Three states: in zone (full progress), in grace zone (no penalty), out (penalty)
     this.isInZone = dist < this.zoneSize
+    this.isInGraceZone = !this.isInZone && dist < (this.zoneSize + this.graceZone)
 
     // Play sound when entering/exiting zone
     if (this.isInZone && !wasInZone) {
@@ -351,8 +362,8 @@ export class SteadyHandGame extends BaseMiniGame {
         duration: 100,
         yoyo: true
       })
-    } else if (!this.isInZone && wasInZone) {
-      // Left zone - play warning sound
+    } else if (!this.isInZone && !this.isInGraceZone && (wasInZone || wasInGraceZone)) {
+      // Left zone completely - play warning sound
       try { audioManager.playMiss() } catch (e) { /* ignore */ }
     }
   }
@@ -361,9 +372,15 @@ export class SteadyHandGame extends BaseMiniGame {
     const dt = delta / 1000
 
     if (this.isInZone) {
+      // Full progress when in zone
       this.progress += this.progressSpeed * dt
       this.shakeFactor = Math.max(0, this.shakeFactor - 5 * dt)
+    } else if (this.isInGraceZone) {
+      // Grace zone: no progress, but minimal penalty (just stops gaining)
+      // Small shake to warn player they're at the edge
+      this.shakeFactor = Math.min(this.maxShake * 0.3, this.shakeFactor + 2 * dt)
     } else {
+      // Outside both zones: penalty applies
       this.progress -= this.penaltySpeed * dt
       this.shakeFactor = Math.min(this.maxShake, this.shakeFactor + 10 * dt)
     }
@@ -381,19 +398,32 @@ export class SteadyHandGame extends BaseMiniGame {
   }
 
   updateVisuals() {
-    // Update cursor color based on zone
-    const cursorColor = this.isInZone ? COLORS.network.primary : COLORS.status.danger
+    // Update cursor color based on zone state
+    let cursorColor
+    if (this.isInZone) {
+      cursorColor = COLORS.network.primary
+    } else if (this.isInGraceZone) {
+      cursorColor = COLORS.status.warning  // Yellow for grace zone
+    } else {
+      cursorColor = COLORS.status.danger
+    }
+
     this.cursorV.setFillStyle(cursorColor)
     this.cursorH.setFillStyle(cursorColor)
     this.cursorDot.setFillStyle(cursorColor)
     this.cursorRing.setStrokeStyle(2, cursorColor)
 
-    // Update zone glow
+    // Update zone glow and status based on state
     if (this.isInZone) {
       this.zoneGlow.setFillStyle(COLORS.network.primary, 0.4)
       this.zoneCircle.setStrokeStyle(4, COLORS.network.primary)
       this.statusText.setText(`${SYMBOLS.system} HOLD STEADY!`)
       this.statusText.setColor(toHexString(COLORS.network.primary))
+    } else if (this.isInGraceZone) {
+      this.zoneGlow.setFillStyle(COLORS.status.warning, 0.3)
+      this.zoneCircle.setStrokeStyle(3, COLORS.status.warning)
+      this.statusText.setText(`${SYMBOLS.alert} EDGE OF ZONE!`)
+      this.statusText.setColor(toHexString(COLORS.status.warning))
     } else {
       this.zoneGlow.setFillStyle(COLORS.status.danger, 0.2)
       this.zoneCircle.setStrokeStyle(3, COLORS.network.primary)

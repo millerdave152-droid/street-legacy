@@ -19,7 +19,8 @@ export const MINI_GAME_TYPES = {
   NEGOTIATION: 'negotiation',
   SURVEILLANCE: 'surveillance',
   STEALTH: 'stealth',
-  DISGUISE: 'disguise'
+  DISGUISE: 'disguise',
+  SMASHGRAB: 'smashgrab'
 }
 
 const COLORS = {
@@ -153,11 +154,11 @@ export const CRIME_GAME_MAPPINGS = {
   car_prowling: {
     crimeId: 'car_prowling',
     crimeName: 'Car Prowling',
-    gameType: MINI_GAME_TYPES.STEADYHAND,
+    gameType: MINI_GAME_TYPES.SMASHGRAB,
     difficulty: 2,
-    timeLimit: 18,
-    targetScore: 120,
-    perfectScore: 200,
+    timeLimit: 25,
+    targetScore: 150,
+    perfectScore: 300,
     theme: {
       primaryColor: COLORS.GRAY,
       secondaryColor: 0x4b5563,
@@ -497,11 +498,11 @@ export const CRIME_GAME_MAPPINGS = {
   car_break_in: {
     crimeId: 'car_break_in',
     crimeName: 'Car Break-in',
-    gameType: MINI_GAME_TYPES.STEADYHAND,
+    gameType: MINI_GAME_TYPES.SMASHGRAB,
     difficulty: 2,
-    timeLimit: 18,
-    targetScore: 120,
-    perfectScore: 200,
+    timeLimit: 25,
+    targetScore: 150,
+    perfectScore: 300,
     theme: {
       primaryColor: COLORS.GRAY,
       secondaryColor: 0x4b5563,
@@ -1692,7 +1693,8 @@ export function getSceneKeyForGame(gameType) {
     [MINI_GAME_TYPES.NEGOTIATION]: 'NegotiationGame',
     [MINI_GAME_TYPES.SURVEILLANCE]: 'SurveillanceGame',
     [MINI_GAME_TYPES.STEALTH]: 'StealthGame',
-    [MINI_GAME_TYPES.DISGUISE]: 'DisguiseGame'
+    [MINI_GAME_TYPES.DISGUISE]: 'DisguiseGame',
+    [MINI_GAME_TYPES.SMASHGRAB]: 'SmashGrabGame'
   }
   return sceneMap[gameType] || 'QTEGame' // Default to QTE
 }
