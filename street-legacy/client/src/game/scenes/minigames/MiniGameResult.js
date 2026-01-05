@@ -802,9 +802,21 @@ export class MiniGameResult extends Phaser.Scene {
   createTitle(centerX) {
     const tier = this.performanceTier
 
-    // Title text
+    // Calculate score ratio for failure messaging
+    const scoreRatio = this.result.score / (this.gameData.targetScore || 100)
+
+    // Title text - FAILED has different messages based on progress
+    let failedTitle
+    if (scoreRatio >= 0.5) {
+      failedTitle = `${SYMBOLS.alert} SO CLOSE!`  // Got far but didn't make it
+    } else if (scoreRatio >= 0.25) {
+      failedTitle = `${SYMBOLS.alert} TIME'S UP`  // Decent progress, time ran out
+    } else {
+      failedTitle = `${SYMBOLS.alert} BUSTED`     // Low progress - caught early
+    }
+
     const titleTexts = {
-      FAILED: `${SYMBOLS.alert} BUSTED`,
+      FAILED: failedTitle,
       BRONZE: `${SYMBOLS.check} COMPLETED`,
       SILVER: `${SYMBOLS.star} SOLID WORK`,
       GOLD: `${SYMBOLS.star}${SYMBOLS.star} EXCELLENT`,
@@ -849,9 +861,18 @@ export class MiniGameResult extends Phaser.Scene {
       })
     }
 
-    // Subtitle
+    // Subtitle - varies for failures based on how far player got
+    let failedSubtitles
+    if (scoreRatio >= 0.5) {
+      failedSubtitles = ['ALMOST HAD IT', 'JUST A BIT MORE', 'SO CLOSE']
+    } else if (scoreRatio >= 0.25) {
+      failedSubtitles = ['RAN OUT OF TIME', 'NEEDED MORE TIME', 'TRY AGAIN']
+    } else {
+      failedSubtitles = ['DETECTED', 'CAUGHT', 'SPOTTED']
+    }
+
     const subtitles = {
-      FAILED: ['SIGNAL LOST', 'CONNECTION TERMINATED', 'TRY AGAIN'],
+      FAILED: failedSubtitles,
       BRONZE: ['JOB DONE', 'KEEP GRINDING', 'ROOM TO GROW'],
       SILVER: ['NICE MOVES', 'GETTING BETTER', 'SOLID RUN'],
       GOLD: ['ELITE PERFORMANCE', 'IMPRESSIVE SKILLS', 'TOP TIER'],

@@ -69,18 +69,21 @@ export class SteadyHandGame extends BaseMiniGame {
       this.graceZone = 10          // Buffer zone at edge
     } else {
       // Easy mode (Pickpocket, etc.) - very forgiving
-      this.zoneSize = 90           // Was 80 - larger target
-      this.zoneMoveSpeed = 1.5     // Was 2 - slower, easier to track
-      this.progressSpeed = 18      // Was 15 - faster completion
-      this.penaltySpeed = 10       // Was 25 - gentle penalty
-      this.maxShake = 2            // Was 3 - less shaky
-      this.graceZone = 12          // Buffer zone at edge
+      this.zoneSize = 95           // Larger target for easy tracking
+      this.zoneMoveSpeed = 1.2     // Slower movement
+      this.progressSpeed = 22      // Faster completion - can finish in ~5 seconds of zone time
+      this.penaltySpeed = 8        // Very gentle penalty
+      this.maxShake = 2            // Less shaky
+      this.graceZone = 15          // Large buffer zone at edge
     }
 
     // Store base values for curveball effects
     this.baseZoneMoveSpeed = this.zoneMoveSpeed
 
-    this.targetProgress = this.gameData.targetScore || 100
+    // Success threshold - 80% progress is enough to win
+    // This makes the game more forgiving while still requiring skill
+    this.targetProgress = 100  // Visual target (100%)
+    this.successThreshold = 80 // Actual success threshold (80%)
 
     // Play area bounds
     this.playArea = {
@@ -288,8 +291,8 @@ export class SteadyHandGame extends BaseMiniGame {
     // Update visuals
     this.updateVisuals()
 
-    // Check win condition
-    if (this.progress >= this.targetProgress) {
+    // Check win condition - succeed at 80% progress
+    if (this.progress >= this.successThreshold) {
       this.handleSuccess()
     }
   }
@@ -388,8 +391,10 @@ export class SteadyHandGame extends BaseMiniGame {
     // Clamp progress
     this.progress = Phaser.Math.Clamp(this.progress, 0, this.targetProgress)
 
-    // Update score
-    this.setScore(Math.floor(this.progress))
+    // Update score to match progress exactly (no confusion)
+    // Score = progress percentage for clarity
+    this.score = Math.floor(this.progress)
+    this.scoreText.setText(`${SYMBOLS.system} SCORE: ${this.score}%`)
 
     // Update progress bar
     const barWidth = 196
@@ -477,8 +482,8 @@ export class SteadyHandGame extends BaseMiniGame {
       duration: 300
     })
 
-    // Time bonus
-    this.addScore(Math.floor(this.timeRemaining * 3))
+    // Final score = progress percentage (no confusing bonuses)
+    this.score = Math.floor(this.progress)
 
     // Show cursor again
     this.input.setDefaultCursor('default')
