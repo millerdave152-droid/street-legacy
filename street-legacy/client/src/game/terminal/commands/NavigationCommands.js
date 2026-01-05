@@ -288,6 +288,48 @@ export function registerNavigationCommands() {
     minLevel: 1,
   })
 
+  // ============================================
+  // SHORTCUT COMMANDS - Direct navigation without "go"
+  // ============================================
+  const shortcuts = [
+    { name: 'jobs', aliases: ['job', 'work'], scene: 'JobScene', display: 'Jobs' },
+    { name: 'crime', aliases: ['crimes'], scene: 'CrimeScene', display: 'Crime' },
+    { name: 'bank', aliases: ['banking'], scene: 'BankScene', display: 'Bank' },
+    { name: 'heist', aliases: ['heists'], scene: 'HeistsScene', display: 'Heists' },
+    { name: 'inventory', aliases: ['inv', 'items'], scene: 'InventoryScene', display: 'Inventory' },
+    { name: 'ops', aliases: ['operations'], scene: 'OperationsHubScene', display: 'Operations Hub' },
+    { name: 'map', aliases: ['travel'], scene: 'MapScene', display: 'Map' },
+    { name: 'crew', aliases: ['gang', 'team'], scene: 'CrewScene', display: 'Crew' }
+  ]
+
+  shortcuts.forEach(({ name, aliases, scene, display }) => {
+    commandRegistry.register({
+      name,
+      aliases,
+      handler: async ({ terminal }) => {
+        terminal.addSystemMessage(`Opening ${display}...`)
+
+        if (terminal.currentScene) {
+          try {
+            const currentKey = terminal.currentScene.scene.key
+            if (currentKey !== scene && currentKey !== 'GameScene') {
+              navigationHistory.push(currentKey)
+            }
+            terminal.currentScene.scene.launch(scene)
+          } catch (e) {
+            console.error(`[NavigationCommands] Error launching ${scene}:`, e)
+            return { error: true, message: `Unable to open ${display}` }
+          }
+        }
+        return null
+      },
+      help: `Go to ${display}`,
+      usage: name,
+      category: CATEGORIES.NAVIGATION,
+      minLevel: 1,
+    })
+  })
+
   console.log('[NavigationCommands] Registered navigation commands')
 }
 

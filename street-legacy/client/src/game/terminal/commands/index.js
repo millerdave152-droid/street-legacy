@@ -12,6 +12,7 @@ import { registerContactCommands } from './ContactCommands'
 import { registerReputationCommands } from './ReputationCommands'
 import { registerDefenseCommands } from './DefenseCommands'
 import { registerOpportunityCommands } from './OpportunityCommands'
+import { registerSettingsCommands } from './SettingsCommands'
 import { terminalNPCManager } from '../../managers/TerminalNPCManager'
 import { heatEventSystem } from '../../managers/HeatEventSystem'
 import { playerReputationManager } from '../../managers/PlayerReputationManager'
@@ -59,6 +60,9 @@ export function registerAllCommands() {
 
   // Opportunity commands (negotiate, events, arc)
   registerOpportunityCommands()
+
+  // Settings/Power user commands (theme, vim, macro, undo)
+  registerSettingsCommands()
 
   // Initialize NPC manager for random messages
   terminalNPCManager.initialize()

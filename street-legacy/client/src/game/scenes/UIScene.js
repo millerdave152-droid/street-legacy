@@ -348,7 +348,7 @@ export class UIScene extends Phaser.Scene {
     const buttonY = height - bottomBarHeight / 2
 
     const buttons = [
-      { icon: 'CFG', action: 'settings', tooltip: 'Settings' },
+      { icon: '⚙️', action: 'settings', tooltip: 'Settings', isEmoji: true },
       { icon: 'NET', action: 'NetworkInboxScene', tooltip: 'THE NETWORK' },
       { icon: 'INV', action: 'InventoryScene', tooltip: 'Inventory' },
       { icon: 'MAP', action: 'MapScene', tooltip: 'Travel' }
@@ -367,12 +367,15 @@ export class UIScene extends Phaser.Scene {
         .on('pointerover', () => {
           bg.setFillStyle(COLORS.bg.elevated)
           bg.setStrokeStyle(BORDERS.thin, COLORS.network.primary, 0.8)
-          icon.setColor(toHexString(COLORS.network.primary))
+          // Only change color for non-emoji icons
+          if (!btn.isEmoji) icon.setColor(toHexString(COLORS.network.primary))
+          else icon.setScale(1.1) // Scale up emoji on hover
         })
         .on('pointerout', () => {
           bg.setFillStyle(COLORS.bg.panel, 0.9)
           bg.setStrokeStyle(BORDERS.thin, COLORS.network.dim, 0.5)
-          icon.setColor(toHexString(COLORS.text.secondary))
+          if (!btn.isEmoji) icon.setColor(toHexString(COLORS.text.secondary))
+          else icon.setScale(1.0) // Reset emoji scale
         })
         .on('pointerdown', () => {
           audioManager.playClick()
@@ -386,10 +389,11 @@ export class UIScene extends Phaser.Scene {
         })
       bg.setDepth(DEPTH.UI_BAR_INTERACTIVE)
 
-      const icon = this.add.text(x, buttonY, btn.icon, {
-        ...getTextStyle('xs', COLORS.text.secondary, 'terminal'),
-        fontStyle: 'bold'
-      }).setOrigin(0.5)
+      // Use larger font for emoji icons vs terminal text for labels
+      const iconStyle = btn.isEmoji
+        ? { fontSize: '18px' }
+        : { ...getTextStyle('xs', COLORS.text.secondary, 'terminal'), fontStyle: 'bold' }
+      const icon = this.add.text(x, buttonY, btn.icon, iconStyle).setOrigin(0.5)
       icon.setDepth(DEPTH.UI_BAR_INTERACTIVE)
 
       // Add message badge for Network Inbox button

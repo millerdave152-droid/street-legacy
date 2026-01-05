@@ -20,6 +20,7 @@
 import { terminalManager, OUTPUT_TYPES } from './TerminalManager'
 import { gameManager } from '../GameManager'
 import { opportunityManager, OPPORTUNITY_TYPES as OPP_TYPES } from '../opportunity/OpportunityManager'
+import { audioManager } from './AudioManager'
 import {
   NPC_CONTACTS,
   NPC_ROLES,
@@ -668,7 +669,8 @@ class TerminalNPCManager {
     this.lastMessageByNPC[contact.id] = Date.now()
     this.savePersistedState()
 
-    // Deliver to terminal
+    // Deliver to terminal with notification sound
+    audioManager.playNotification()
     const fullMessage = buildNPCMessage(contact.id, messageType, message)
     terminalManager.addOutput(``, OUTPUT_TYPES.SYSTEM)
     terminalManager.addOutput(`:: INCOMING MESSAGE ::`, OUTPUT_TYPES.SYSTEM)
@@ -692,6 +694,9 @@ class TerminalNPCManager {
 
     const templates = rat.messageTemplates.BETRAYALS
     const message = templates[Math.floor(Math.random() * templates.length)]
+
+    // Play urgent alert sound for betrayal
+    audioManager.playError()
 
     terminalManager.addOutput(``, OUTPUT_TYPES.ERROR)
     terminalManager.addOutput(`:: URGENT MESSAGE ::`, OUTPUT_TYPES.ERROR)
@@ -744,6 +749,9 @@ class TerminalNPCManager {
     const morgan = NPC_CONTACTS.detective_morgan
     const templates = morgan.messageTemplates.SCAMS
     const message = templates[Math.floor(Math.random() * templates.length)]
+
+    // Play notification for trap message (sounds like normal message)
+    audioManager.playNotification()
 
     terminalManager.addOutput(``, OUTPUT_TYPES.SYSTEM)
     terminalManager.addOutput(`:: INCOMING MESSAGE ::`, OUTPUT_TYPES.SYSTEM)
@@ -823,7 +831,9 @@ class TerminalNPCManager {
 
     const prefix = `${npc.prefix} ${npc.displayName}`
 
-    // Add a notification sound or visual
+    // Play notification sound for incoming NPC message
+    audioManager.playNotification()
+
     terminalManager.addOutput(``, OUTPUT_TYPES.SYSTEM)
     terminalManager.addOutput(`:: INCOMING MESSAGE ::`, OUTPUT_TYPES.SYSTEM)
     terminalManager.addOutput(`${prefix}: ${opportunity.message}`, OUTPUT_TYPES[npc.color.toUpperCase()] || OUTPUT_TYPES.HANDLER)

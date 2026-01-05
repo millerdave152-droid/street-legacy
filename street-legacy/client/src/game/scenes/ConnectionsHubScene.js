@@ -206,8 +206,9 @@ export class ConnectionsHubScene extends BaseScene {
       .setStrokeStyle(1, 0x4488FF, 0.3)
       .setDepth(DEPTH.CONTENT_BASE)
 
-    // Current location
-    const currentDistrict = player.current_district || player.currentDistrict || 'Downtown'
+    // Current location - handle both object and string formats
+    const districtData = player.current_district || player.currentDistrict
+    const currentDistrict = typeof districtData === 'object' ? (districtData?.name || 'Downtown') : (districtData || 'Downtown')
     this.add.text(25, barY, '[M] LOCATION:', {
       ...getTerminalStyle('xs'),
       color: toHexString(COLORS.text.muted)
@@ -477,7 +478,10 @@ export class ConnectionsHubScene extends BaseScene {
   renderTravelContent(startY) {
     const { width, height } = this.cameras.main
     const player = gameManager.player || getPlayerData() || {}
-    const currentDistrict = player.current_district || player.currentDistrict || 'Downtown'
+    // Handle both object and string formats for district
+    const districtData = player.current_district || player.currentDistrict
+    const currentDistrictName = typeof districtData === 'object' ? (districtData?.name || 'Downtown') : (districtData || 'Downtown')
+    const currentDistrictId = typeof districtData === 'object' ? (districtData?.id || 'downtown') : (districtData || 'downtown')
 
     // Section header
     const headerText = this.add.text(25, startY, `${SYMBOLS.system} DESTINATIONS`, {
@@ -487,7 +491,7 @@ export class ConnectionsHubScene extends BaseScene {
     this.contentItems.push(headerText)
 
     // Current location
-    const locText = this.add.text(width - 25, startY, `From: ${currentDistrict}`, {
+    const locText = this.add.text(width - 25, startY, `From: ${currentDistrictName}`, {
       ...getTextStyle('xs', COLORS.text.muted, 'terminal')
     }).setOrigin(1, 0).setDepth(DEPTH.PANEL_CONTENT)
     this.contentItems.push(locText)
@@ -495,8 +499,8 @@ export class ConnectionsHubScene extends BaseScene {
     const cardHeight = 65
     const cardSpacing = 6
 
-    // Available districts
-    const availableDistricts = DISTRICTS.filter(d => d.id !== currentDistrict && d.id !== player.currentDistrict)
+    // Available districts - filter out current location
+    const availableDistricts = DISTRICTS.filter(d => d.id !== currentDistrictId)
 
     if (availableDistricts.length === 0) {
       const noDestText = this.add.text(width / 2, height / 2, 'No destinations available', {

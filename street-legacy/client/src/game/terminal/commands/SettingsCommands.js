@@ -25,18 +25,12 @@ export function registerSettingsCommands() {
   // ============================================
   // SETTINGS COMMAND
   // ============================================
-  commandRegistry.register('settings', {
-    description: 'Show or modify terminal settings',
+  commandRegistry.register({
+    name: 'settings',
+    help: 'Show or modify terminal settings',
     usage: 'settings [category] [option] [value]',
-    examples: [
-      'settings',
-      'settings theme',
-      'settings theme cyberpunk',
-      'settings font 12',
-      'settings effects scanlines off'
-    ],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       if (args.length === 0) {
         return showAllSettings()
       }
@@ -57,7 +51,7 @@ export function registerSettingsCommands() {
         case 'reset':
           return resetSettings()
         default:
-          return { success: false, message: `Unknown setting category: ${category}` }
+          return { error: true, message: `Unknown setting category: ${category}` }
       }
     }
   })
@@ -65,20 +59,14 @@ export function registerSettingsCommands() {
   // ============================================
   // THEME COMMAND
   // ============================================
-  commandRegistry.register('theme', {
-    description: 'Change terminal theme',
+  commandRegistry.register({
+    name: 'theme',
+    help: 'Change terminal theme',
     usage: 'theme [name]',
-    examples: [
-      'theme',
-      'theme list',
-      'theme cyberpunk',
-      'theme matrix',
-      'theme reset'
-    ],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       if (args.length === 0 || args[0] === 'current') {
-        return { success: true, message: themeManager.formatCurrentTheme() }
+        return { output: themeManager.formatCurrentTheme() }
       }
 
       if (args[0] === 'list') {
@@ -89,7 +77,7 @@ export function registerSettingsCommands() {
           lines.push(`  ${t.key}${current}`)
           lines.push(`    ${t.description}`)
         })
-        return { success: true, message: lines.join('\n') }
+        return { output: lines.join('\n') }
       }
 
       if (args[0] === 'reset') {
@@ -103,22 +91,16 @@ export function registerSettingsCommands() {
   // ============================================
   // VIM COMMAND
   // ============================================
-  commandRegistry.register('vim', {
-    description: 'Toggle or configure vim mode',
+  commandRegistry.register({
+    name: 'vim',
+    help: 'Toggle or configure vim mode',
     usage: 'vim [on|off|status]',
-    examples: [
-      'vim',
-      'vim on',
-      'vim off',
-      'vim status'
-    ],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       if (args.length === 0 || args[0] === 'status') {
         const stats = vimModeManager.getStats()
         return {
-          success: true,
-          message: [
+          output: [
             `Vim Mode: ${stats.enabled ? 'ENABLED' : 'DISABLED'}`,
             stats.enabled ? `Current Mode: ${stats.currentMode}` : '',
             '',
@@ -129,48 +111,40 @@ export function registerSettingsCommands() {
 
       if (args[0] === 'on' || args[0] === 'enable') {
         vimModeManager.enable()
-        return { success: true, message: 'Vim mode enabled. Press Escape for NORMAL mode, i for INSERT mode.' }
+        return { output: 'Vim mode enabled. Press Escape for NORMAL mode, i for INSERT mode.' }
       }
 
       if (args[0] === 'off' || args[0] === 'disable') {
         vimModeManager.disable()
-        return { success: true, message: 'Vim mode disabled.' }
+        return { output: 'Vim mode disabled.' }
       }
 
-      return { success: false, message: 'Usage: vim [on|off|status]' }
+      return { error: true, message: 'Usage: vim [on|off|status]' }
     }
   })
 
   // ============================================
   // MACRO COMMAND
   // ============================================
-  commandRegistry.register('macro', {
-    description: 'Manage command macros',
+  commandRegistry.register({
+    name: 'macro',
+    help: 'Manage command macros',
     usage: 'macro <subcommand> [args]',
-    examples: [
-      'macro list',
-      'macro record myjob',
-      'macro stop',
-      'macro run myjob',
-      'macro define grind "crime && status"',
-      'macro bind Ctrl+1 grind',
-      'macro delete myjob'
-    ],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       if (args.length === 0) {
-        return { success: true, message: macroManager.formatMacroList() }
+        return { output: macroManager.formatMacroList() }
       }
 
       const subcommand = args[0].toLowerCase()
 
       switch (subcommand) {
         case 'list':
-          return { success: true, message: macroManager.formatMacroList() }
+          return { output: macroManager.formatMacroList() }
 
         case 'record':
           if (!args[1]) {
-            return { success: false, message: 'Usage: macro record <name>' }
+            return { error: true, message: 'Usage: macro record <name>' }
           }
           return macroManager.startRecording(args[1])
 
@@ -179,13 +153,13 @@ export function registerSettingsCommands() {
 
         case 'run':
           if (!args[1]) {
-            return { success: false, message: 'Usage: macro run <name> [args...]' }
+            return { error: true, message: 'Usage: macro run <name> [args...]' }
           }
           return macroManager.runMacro(args[1], args.slice(2))
 
         case 'define':
           if (!args[1] || !args[2]) {
-            return { success: false, message: 'Usage: macro define <name> "<commands>"' }
+            return { error: true, message: 'Usage: macro define <name> "<commands>"' }
           }
           // Join and remove surrounding quotes
           let commands = args.slice(2).join(' ')
@@ -194,31 +168,31 @@ export function registerSettingsCommands() {
 
         case 'bind':
           if (!args[1] || !args[2]) {
-            return { success: false, message: 'Usage: macro bind <key> <macro_name>' }
+            return { error: true, message: 'Usage: macro bind <key> <macro_name>' }
           }
           return macroManager.bindKey(args[1], args[2])
 
         case 'unbind':
           if (!args[1]) {
-            return { success: false, message: 'Usage: macro unbind <key>' }
+            return { error: true, message: 'Usage: macro unbind <key>' }
           }
           return macroManager.unbindKey(args[1])
 
         case 'delete':
         case 'remove':
           if (!args[1]) {
-            return { success: false, message: 'Usage: macro delete <name>' }
+            return { error: true, message: 'Usage: macro delete <name>' }
           }
           return macroManager.deleteMacro(args[1])
 
         case 'show':
           if (!args[1]) {
-            return { success: false, message: 'Usage: macro show <name>' }
+            return { error: true, message: 'Usage: macro show <name>' }
           }
-          return { success: true, message: macroManager.formatMacroDetails(args[1]) }
+          return { output: macroManager.formatMacroDetails(args[1]) }
 
         default:
-          return { success: false, message: `Unknown macro subcommand: ${subcommand}` }
+          return { error: true, message: `Unknown macro subcommand: ${subcommand}` }
       }
     }
   })
@@ -226,15 +200,12 @@ export function registerSettingsCommands() {
   // ============================================
   // UNDO COMMAND
   // ============================================
-  commandRegistry.register('undo', {
-    description: 'Undo last action(s)',
+  commandRegistry.register({
+    name: 'undo',
+    help: 'Undo last action(s)',
     usage: 'undo [count]',
-    examples: [
-      'undo',
-      'undo 3'
-    ],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       const count = parseInt(args[0]) || 1
       return undoManager.undo(count)
     }
@@ -243,15 +214,12 @@ export function registerSettingsCommands() {
   // ============================================
   // REDO COMMAND
   // ============================================
-  commandRegistry.register('redo', {
-    description: 'Redo last undone action(s)',
+  commandRegistry.register({
+    name: 'redo',
+    help: 'Redo last undone action(s)',
     usage: 'redo [count]',
-    examples: [
-      'redo',
-      'redo 2'
-    ],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       const count = parseInt(args[0]) || 1
       return undoManager.redo(count)
     }
@@ -260,73 +228,66 @@ export function registerSettingsCommands() {
   // ============================================
   // HISTORY COMMAND
   // ============================================
-  commandRegistry.register('history', {
-    description: 'Show command/action history',
+  commandRegistry.register({
+    name: 'history',
+    help: 'Show command/action history',
     usage: 'history [count]',
-    examples: [
-      'history',
-      'history 50'
-    ],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       const count = parseInt(args[0]) || 20
-      return { success: true, message: undoManager.formatHistory(count) }
+      return { output: undoManager.formatHistory(count) }
     }
   })
 
   // ============================================
   // PIPE COMMAND (help for pipe filters)
   // ============================================
-  commandRegistry.register('pipe', {
-    description: 'Show available pipe filters',
+  commandRegistry.register({
+    name: 'pipe',
+    help: 'Show available pipe filters',
     usage: 'pipe',
-    examples: [
-      'pipe',
-      'status | grep cash',
-      'contacts | head 5'
-    ],
     category: 'system',
     handler: async () => {
-      return { success: true, message: commandChainExecutor.getFilterHelp() }
+      return { output: commandChainExecutor.getFilterHelp() }
     }
   })
 
   // ============================================
   // ALIAS for common settings
   // ============================================
-  commandRegistry.register('font', {
-    description: 'Set terminal font size',
+  commandRegistry.register({
+    name: 'font',
+    help: 'Set terminal font size',
     usage: 'font <size>',
-    examples: ['font 12', 'font 11'],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       if (!args[0]) {
         const font = themeManager.getFont()
-        return { success: true, message: `Current font size: ${font.size}px` }
+        return { output: `Current font size: ${font.size}px` }
       }
       return themeManager.setFontSize(args[0])
     }
   })
 
-  commandRegistry.register('effects', {
-    description: 'Toggle visual effects',
+  commandRegistry.register({
+    name: 'effects',
+    help: 'Toggle visual effects',
     usage: 'effects [on|off]',
-    examples: ['effects', 'effects off', 'effects on'],
     category: 'system',
-    handler: async (args) => {
+    handler: async ({ args }) => {
       if (!args[0]) {
         const effects = themeManager.getEffects()
         const lines = ['Visual Effects:', '']
         Object.entries(effects).forEach(([key, value]) => {
           lines.push(`  ${key}: ${value}`)
         })
-        return { success: true, message: lines.join('\n') }
+        return { output: lines.join('\n') }
       }
 
       const enabled = args[0] === 'on' || args[0] === 'true'
       themeManager.setEffect('scanlines', enabled)
       themeManager.setEffect('glow', enabled)
-      return { success: true, message: `Visual effects ${enabled ? 'enabled' : 'disabled'}` }
+      return { output: `Visual effects ${enabled ? 'enabled' : 'disabled'}` }
     }
   })
 }
@@ -361,12 +322,12 @@ function showAllSettings() {
     '  settings reset         - Reset to defaults'
   ]
 
-  return { success: true, message: lines.join('\n') }
+  return { output: lines.join('\n') }
 }
 
 function handleThemeSetting(themeName, value) {
   if (!themeName) {
-    return { success: true, message: themeManager.formatCurrentTheme() }
+    return { output: themeManager.formatCurrentTheme() }
   }
 
   // Check if it's a color setting
@@ -381,7 +342,7 @@ function handleThemeSetting(themeName, value) {
 function handleFontSetting(size) {
   if (!size) {
     const font = themeManager.getFont()
-    return { success: true, message: `Current font size: ${font.size}px` }
+    return { output: `Current font size: ${font.size}px` }
   }
   return themeManager.setFontSize(size)
 }
@@ -393,7 +354,7 @@ function handleEffectsSetting(effect, value) {
     Object.entries(effects).forEach(([key, val]) => {
       lines.push(`  ${key}: ${val}`)
     })
-    return { success: true, message: lines.join('\n') }
+    return { output: lines.join('\n') }
   }
 
   return themeManager.setEffect(effect, value)
@@ -401,26 +362,26 @@ function handleEffectsSetting(effect, value) {
 
 function handleVimSetting(option) {
   if (!option) {
-    return { success: true, message: `Vim mode: ${vimModeManager.isEnabled() ? 'enabled' : 'disabled'}` }
+    return { output: `Vim mode: ${vimModeManager.isEnabled() ? 'enabled' : 'disabled'}` }
   }
 
   if (option === 'on' || option === 'enable') {
     vimModeManager.enable()
-    return { success: true, message: 'Vim mode enabled' }
+    return { output: 'Vim mode enabled' }
   }
 
   if (option === 'off' || option === 'disable') {
     vimModeManager.disable()
-    return { success: true, message: 'Vim mode disabled' }
+    return { output: 'Vim mode disabled' }
   }
 
-  return { success: false, message: 'Usage: settings vim [on|off]' }
+  return { error: true, message: 'Usage: settings vim [on|off]' }
 }
 
 function resetSettings() {
   themeManager.resetToDefault()
   vimModeManager.disable()
-  return { success: true, message: 'All settings reset to defaults' }
+  return { output: 'All settings reset to defaults' }
 }
 
 export default { registerSettingsCommands }

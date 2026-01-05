@@ -602,6 +602,7 @@ export class TerminalWidget {
       case 'output':
       case 'clear':
       case 'scroll':
+      case 'refresh':
         this.renderOutput()
         break
 
@@ -659,7 +660,13 @@ export class TerminalWidget {
 
       // Parse for clickables
       const parsed = parseClickables(line.text)
-      const displayText = parsed.plainText
+      let displayText = parsed.plainText
+
+      // Add timestamp prefix if enabled
+      if (terminalManager.getShowTimestamps() && line.timestamp) {
+        const tsPrefix = terminalManager.formatTimestamp(line.timestamp)
+        displayText = `${tsPrefix} ${displayText}`
+      }
 
       // Set text and color first
       textObj.setText(displayText)
@@ -689,13 +696,22 @@ export class TerminalWidget {
       linesRendered++
     }
 
-    // Update scroll indicator
-    const totalLines = allOutput.length
-    if (scrollOffset > 0) {
-      this.scrollIndicator.setText('↑')
-      this.scrollIndicator.setVisible(true)
-    } else if (totalLines > this.visibleLines) {
-      this.scrollIndicator.setText('↓')
+    // Update scroll indicator with position info
+    const scrollInfo = terminalManager.getScrollInfo()
+    if (scrollInfo.canScroll) {
+      // Calculate position indicator
+      const upArrow = scrollInfo.atTop ? '─' : '▲'
+      const downArrow = scrollInfo.atBottom ? '─' : '▼'
+
+      // Show scroll position
+      if (scrollInfo.offset > 0) {
+        const linesAbove = scrollInfo.offset
+        this.scrollIndicator.setText(`${upArrow}\n${linesAbove}\n${downArrow}`)
+        this.scrollIndicator.setColor(toHexString(COLORS.network.primary))
+      } else {
+        this.scrollIndicator.setText(`${upArrow}\n·\n${downArrow}`)
+        this.scrollIndicator.setColor(toHexString(COLORS.text.muted))
+      }
       this.scrollIndicator.setVisible(true)
     } else {
       this.scrollIndicator.setVisible(false)

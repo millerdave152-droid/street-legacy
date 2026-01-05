@@ -106,14 +106,8 @@ class InputRouterClass {
       }
     }
 
-    // 1. Check for exact command match
-    const directCommand = this.checkDirectCommand(trimmed)
-    if (directCommand) {
-      this.lastRouting = { type: 'command', input: trimmed }
-      return { type: 'command', data: trimmed }
-    }
-
-    // 2. Check for natural language command patterns
+    // 1. Check for natural language command patterns FIRST
+    // This prevents phrases like "take me to ops" from matching the "take" command alias
     const nlCommand = this.matchNLPattern(trimmed)
     if (nlCommand) {
       this.lastRouting = { type: 'nl_command', input: trimmed, command: nlCommand.command }
@@ -122,6 +116,13 @@ class InputRouterClass {
         data: nlCommand.command,
         echo: nlCommand.echo
       }
+    }
+
+    // 2. Check for exact command match
+    const directCommand = this.checkDirectCommand(trimmed)
+    if (directCommand) {
+      this.lastRouting = { type: 'command', input: trimmed }
+      return { type: 'command', data: trimmed }
     }
 
     // 3. Score the input to determine if it's a command or conversation

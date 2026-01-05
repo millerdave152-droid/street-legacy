@@ -195,6 +195,212 @@ export function registerInfoCommands() {
     hidden: true,
   })
 
+  // ============================================
+  // BANKING COMMANDS
+  // ============================================
+
+  // DEPOSIT command - Transfer cash to bank
+  commandRegistry.register({
+    name: 'deposit',
+    aliases: ['dep', 'save'],
+    handler: async ({ args }) => {
+      const player = gameManager.player
+      if (!player) {
+        return { error: true, message: 'No player data available.' }
+      }
+
+      if (args.length === 0) {
+        return {
+          error: true,
+          message: `Usage: deposit <amount> or 'deposit all'\nCash: ${formatMoney(player.cash || 0)} | Bank: ${formatMoney(player.bank || 0)}`
+        }
+      }
+
+      let amount
+      const arg = args[0].toLowerCase()
+
+      if (arg === 'all' || arg === 'max') {
+        amount = player.cash || 0
+      } else {
+        // Parse amount - handle formats like "500", "$500", "5k", "5000"
+        const numStr = arg.replace(/[$,]/g, '').replace(/k$/i, '000').replace(/m$/i, '000000')
+        amount = parseInt(numStr)
+      }
+
+      if (isNaN(amount) || amount <= 0) {
+        return { error: true, message: 'Please enter a valid amount.' }
+      }
+
+      if (amount > (player.cash || 0)) {
+        return { error: true, message: `Insufficient cash. You have ${formatMoney(player.cash || 0)}.` }
+      }
+
+      // Perform the deposit
+      const newCash = (player.cash || 0) - amount
+      const newBank = (player.bank || 0) + amount
+
+      gameManager.updatePlayer({ cash: newCash, bank: newBank })
+
+      return {
+        output: [
+          { text: `:: DEPOSIT SUCCESSFUL ::`, type: 'system' },
+          { text: `  Deposited: ${formatMoney(amount)}`, type: 'success' },
+          { text: `  Cash: ${formatMoney(newCash)}`, type: 'response' },
+          { text: `  Bank: ${formatMoney(newBank)}`, type: 'response' }
+        ]
+      }
+    },
+    help: 'Deposit cash into your bank account',
+    usage: 'deposit <amount>',
+    category: CATEGORIES.ACTION,
+    minLevel: 1,
+  })
+
+  // WITHDRAW command - Transfer bank funds to cash
+  commandRegistry.register({
+    name: 'withdraw',
+    aliases: ['wd', 'cash'],
+    handler: async ({ args }) => {
+      const player = gameManager.player
+      if (!player) {
+        return { error: true, message: 'No player data available.' }
+      }
+
+      if (args.length === 0) {
+        return {
+          error: true,
+          message: `Usage: withdraw <amount> or 'withdraw all'\nCash: ${formatMoney(player.cash || 0)} | Bank: ${formatMoney(player.bank || 0)}`
+        }
+      }
+
+      let amount
+      const arg = args[0].toLowerCase()
+
+      if (arg === 'all' || arg === 'max') {
+        amount = player.bank || 0
+      } else {
+        // Parse amount - handle formats like "500", "$500", "5k", "5000"
+        const numStr = arg.replace(/[$,]/g, '').replace(/k$/i, '000').replace(/m$/i, '000000')
+        amount = parseInt(numStr)
+      }
+
+      if (isNaN(amount) || amount <= 0) {
+        return { error: true, message: 'Please enter a valid amount.' }
+      }
+
+      if (amount > (player.bank || 0)) {
+        return { error: true, message: `Insufficient bank balance. You have ${formatMoney(player.bank || 0)} in the bank.` }
+      }
+
+      // Perform the withdrawal
+      const newBank = (player.bank || 0) - amount
+      const newCash = (player.cash || 0) + amount
+
+      gameManager.updatePlayer({ cash: newCash, bank: newBank })
+
+      return {
+        output: [
+          { text: `:: WITHDRAWAL SUCCESSFUL ::`, type: 'system' },
+          { text: `  Withdrew: ${formatMoney(amount)}`, type: 'success' },
+          { text: `  Cash: ${formatMoney(newCash)}`, type: 'response' },
+          { text: `  Bank: ${formatMoney(newBank)}`, type: 'response' }
+        ]
+      }
+    },
+    help: 'Withdraw funds from your bank account',
+    usage: 'withdraw <amount>',
+    category: CATEGORIES.ACTION,
+    minLevel: 1,
+  })
+
+  // ============================================
+  // IDENTITY COMMANDS
+  // ============================================
+
+  // NICK command - Change player username
+  commandRegistry.register({
+    name: 'nick',
+    aliases: ['nickname', 'name', 'setname', 'rename'],
+    handler: async ({ args }) => {
+      const player = gameManager.player
+      if (!player) {
+        return { error: true, message: 'No player data available.' }
+      }
+
+      if (args.length === 0) {
+        return {
+          output: [
+            { text: ':: Player Identity', type: 'system' },
+            { text: `  Current name: @${player.username || 'player'}`, type: 'response' },
+            { text: '', type: 'response' },
+            { text: '  Usage: nick <new_name>', type: 'system' },
+            { text: '  Example: nick ShadowRunner', type: 'response' },
+          ]
+        }
+      }
+
+      const newName = args.join(' ').trim()
+
+      // Validation
+      if (newName.length < 2) {
+        return { error: true, message: 'Name must be at least 2 characters.' }
+      }
+      if (newName.length > 20) {
+        return { error: true, message: 'Name cannot exceed 20 characters.' }
+      }
+      if (!/^[a-zA-Z0-9_\-]+$/.test(newName)) {
+        return { error: true, message: 'Name can only contain letters, numbers, underscores, and hyphens.' }
+      }
+
+      const oldName = player.username || 'player'
+      gameManager.updatePlayerData({ username: newName })
+
+      return {
+        output: [
+          { text: ':: Identity Updated', type: 'system' },
+          { text: `  Changed from @${oldName} to @${newName}`, type: 'success' },
+        ]
+      }
+    },
+    help: 'Change your player name',
+    usage: 'nick <new_name>',
+    category: CATEGORIES.INFO,
+    minLevel: 1,
+  })
+
+  // BALANCE command - Show bank balance
+  commandRegistry.register({
+    name: 'balance',
+    aliases: ['bal', 'money'],
+    handler: async () => {
+      const player = gameManager.player
+      if (!player) {
+        return { error: true, message: 'No player data available.' }
+      }
+
+      const cash = player.cash || 0
+      const bank = player.bank || 0
+      const total = cash + bank
+
+      return {
+        output: [
+          { text: `:: FINANCIAL STATUS ::`, type: 'system' },
+          { text: `  Cash on hand: ${formatMoney(cash)}`, type: 'response' },
+          { text: `  Bank account: ${formatMoney(bank)}`, type: 'response' },
+          { text: `  ─────────────────────`, type: 'system' },
+          { text: `  Total assets: ${formatMoney(total)}`, type: 'success' },
+          { text: ``, type: 'system' },
+          { text: `  Use 'deposit <amount>' to save money`, type: 'system' },
+          { text: `  Use 'withdraw <amount>' to access funds`, type: 'system' }
+        ]
+      }
+    },
+    help: 'Check your financial status',
+    usage: 'balance',
+    category: CATEGORIES.INFO,
+    minLevel: 1,
+  })
+
   console.log('[InfoCommands] Registered info commands')
 }
 

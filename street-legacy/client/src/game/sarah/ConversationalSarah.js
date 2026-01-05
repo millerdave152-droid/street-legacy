@@ -108,6 +108,11 @@ class ConversationalSarahClass {
    * @returns {object} Response { output: [], type: 'sarah' }
    */
   async processInput(input, terminal) {
+    // Ensure S.A.R.A.H. is initialized
+    if (!sarahManager.isInitialized) {
+      sarahManager.initialize()
+    }
+
     const trimmed = input.trim()
     if (!trimmed) {
       return this.formatResponse("What's on your mind?")
@@ -167,13 +172,10 @@ class ConversationalSarahClass {
     // 4. Get the main response from SarahManager
     const response = await sarahManager.processQuery(resolvedInput)
 
-    // Merge responses
+    // Merge responses - include all response lines (echo is just confirmation, response is content)
     if (response && response.output) {
       const responseLines = Array.isArray(response.output) ? response.output : [response.output]
-      // If we already have an echo, skip the first line (which is usually the S.A.R.A.H. header)
-      const startIndex = echo ? 1 : 0
-      for (let i = startIndex; i < responseLines.length; i++) {
-        const line = responseLines[i]
+      for (const line of responseLines) {
         if (typeof line === 'object') {
           lines.push(line)
         } else {

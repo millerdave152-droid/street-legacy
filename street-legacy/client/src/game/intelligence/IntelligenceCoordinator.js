@@ -19,6 +19,7 @@ class IntelligenceCoordinatorClass {
     this.listeners = []
     this.currentPredictions = null
     this.lastInputTime = 0
+    this.isProcessingEvent = false  // Guard against recursive event handling
   }
 
   /**
@@ -56,22 +57,33 @@ class IntelligenceCoordinatorClass {
    * Handle terminal events for learning and predictions
    */
   handleTerminalEvent(event, data) {
-    switch (event) {
-      case 'input':
-        // Update predictions as user types
-        this.lastInputTime = Date.now()
-        const predictions = this.getPredictions(data.input)
-        this.currentPredictions = predictions
-        this.notifyListeners('predictions', predictions)
-        break
+    // Guard against recursive event handling
+    if (this.isProcessingEvent) {
+      return
+    }
 
-      case 'output':
-        // Track executed commands
-        if (data.type === 'command') {
-          const command = data.text?.replace(/^>\s*/, '') || ''
-          this.onCommandExecuted(command)
-        }
-        break
+    this.isProcessingEvent = true
+
+    try {
+      switch (event) {
+        case 'input':
+          // Update predictions as user types
+          this.lastInputTime = Date.now()
+          const predictions = this.getPredictions(data.input)
+          this.currentPredictions = predictions
+          this.notifyListeners('predictions', predictions)
+          break
+
+        case 'output':
+          // Track executed commands
+          if (data.type === 'command') {
+            const command = data.text?.replace(/^>\s*/, '') || ''
+            this.onCommandExecuted(command)
+          }
+          break
+      }
+    } finally {
+      this.isProcessingEvent = false
     }
   }
 
