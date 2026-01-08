@@ -1,11 +1,11 @@
 /**
- * BaseScene - Base class for all game scenes with proper cleanup
+ * BaseScene - Street Legacy base class for all game scenes
  *
- * Features:
- * - Automatic cleanup of tweens, timers, and listeners
- * - Scene transition helpers
- * - Common utility methods
- * - Memory leak prevention
+ * Extends CoreBaseScene with game-specific functionality:
+ * - AudioManager integration
+ * - NotificationManager integration
+ * - NetworkTransition animations
+ * - Game-themed UI helpers
  *
  * Usage:
  *   import BaseScene from './BaseScene'
@@ -22,35 +22,26 @@
  *   }
  */
 
-import Phaser from 'phaser'
+import { CoreBaseScene } from '../core/scenes/CoreBaseScene'
 import { audioManager } from '../managers/AudioManager'
 import { notificationManager } from '../managers/NotificationManager'
 import { networkTransition } from '../ui/NetworkTransition'
 import { DEPTH, getTerminalStyle } from '../ui/NetworkTheme'
 
-export class BaseScene extends Phaser.Scene {
+export class BaseScene extends CoreBaseScene {
   constructor(key) {
-    super({ key })
-
-    // Track custom event listeners for cleanup
-    this.customListeners = []
-
-    // Track custom intervals/timeouts
-    this.customIntervals = []
-    this.customTimeouts = []
-
-    // Scene dimensions
-    this.width = 0
-    this.height = 0
-    this.centerX = 0
-    this.centerY = 0
-  }
-
-  /**
-   * Initialize scene - called with data passed from previous scene
-   */
-  init(data) {
-    this.initData = data || {}
+    super(key, {
+      onSceneReady: (scene) => {
+        // Set up managers when scene is ready
+        audioManager.setScene(scene)
+        notificationManager.setScene(scene)
+      },
+      onSceneWake: (scene) => {
+        // Re-initialize managers on wake
+        audioManager.setScene(scene)
+        notificationManager.setScene(scene)
+      }
+    })
   }
 
   /**
@@ -59,27 +50,8 @@ export class BaseScene extends Phaser.Scene {
    * @param {boolean} options.skipIntro - Skip the intro animation
    */
   create(options = {}) {
-    // Store dimensions for easy access
-    this.width = this.cameras.main.width
-    this.height = this.cameras.main.height
-    this.centerX = this.width / 2
-    this.centerY = this.height / 2
-
-    // Set up audio manager for this scene
-    audioManager.setScene(this)
-
-    // Set up notification manager for this scene
-    notificationManager.setScene(this)
-
-    // Listen for scene events
-    this.events.on('shutdown', this.shutdown, this)
-    this.events.on('destroy', this.destroy, this)
-
-    // Listen for sleep/wake (for overlay scenes)
-    this.events.on('sleep', this.onSleep, this)
-    this.events.on('wake', this.onWake, this)
-    this.events.on('pause', this.onPause, this)
-    this.events.on('resume', this.onResume, this)
+    // Call parent create
+    super.create(options)
 
     // Play scene intro animation (unless skipped)
     // Skip for utility scenes like Settings, Boot, Preload, etc.
@@ -90,209 +62,6 @@ export class BaseScene extends Phaser.Scene {
         networkTransition.playSceneIntro(this, this.scene.key)
       })
     }
-  }
-
-  // ==========================================================================
-  // SCENE LIFECYCLE HOOKS (Override in subclasses)
-  // ==========================================================================
-
-  /**
-   * Called when scene goes to sleep (another scene overlays)
-   */
-  onSleep() {
-    // Override in subclass if needed
-  }
-
-  /**
-   * Called when scene wakes up from sleep
-   */
-  onWake(sys, data) {
-    // Re-initialize managers
-    audioManager.setScene(this)
-    notificationManager.setScene(this)
-    // Override in subclass for custom behavior
-  }
-
-  /**
-   * Called when scene is paused
-   */
-  onPause() {
-    // Override in subclass if needed
-  }
-
-  /**
-   * Called when scene resumes from pause
-   */
-  onResume() {
-    // Override in subclass if needed
-  }
-
-  // ==========================================================================
-  // CLEANUP METHODS
-  // ==========================================================================
-
-  /**
-   * Shutdown - cleanup all resources
-   * Called when scene is stopped/switched
-   */
-  shutdown() {
-    // Kill all tweens in this scene
-    this.tweens.killAll()
-
-    // Remove all time events (timers)
-    this.time.removeAllEvents()
-
-    // Remove all input listeners
-    if (this.input.keyboard) {
-      this.input.keyboard.removeAllListeners()
-      this.input.keyboard.removeAllKeys()
-    }
-    this.input.removeAllListeners()
-
-    // Clear custom listeners
-    this.clearCustomListeners()
-
-    // Clear custom intervals and timeouts
-    this.clearCustomTimers()
-
-    // Remove scene event listeners
-    this.events.off('shutdown', this.shutdown, this)
-    this.events.off('destroy', this.destroy, this)
-    this.events.off('sleep', this.onSleep, this)
-    this.events.off('wake', this.onWake, this)
-    this.events.off('pause', this.onPause, this)
-    this.events.off('resume', this.onResume, this)
-  }
-
-  /**
-   * Destroy - called when scene is completely removed
-   */
-  destroy() {
-    this.shutdown()
-  }
-
-  /**
-   * Clear all custom event listeners
-   */
-  clearCustomListeners() {
-    for (const { target, event, handler } of this.customListeners) {
-      if (target && typeof target.off === 'function') {
-        target.off(event, handler)
-      } else if (target && typeof target.removeEventListener === 'function') {
-        target.removeEventListener(event, handler)
-      }
-    }
-    this.customListeners = []
-  }
-
-  /**
-   * Clear all custom intervals and timeouts
-   */
-  clearCustomTimers() {
-    for (const id of this.customIntervals) {
-      clearInterval(id)
-    }
-    this.customIntervals = []
-
-    for (const id of this.customTimeouts) {
-      clearTimeout(id)
-    }
-    this.customTimeouts = []
-  }
-
-  // ==========================================================================
-  // EVENT LISTENER HELPERS (Auto-tracked for cleanup)
-  // ==========================================================================
-
-  /**
-   * Add event listener that will be auto-cleaned on shutdown
-   * @param {EventEmitter} target - Target object
-   * @param {string} event - Event name
-   * @param {Function} handler - Event handler
-   */
-  addListener(target, event, handler) {
-    this.customListeners.push({ target, event, handler })
-    target.on(event, handler)
-  }
-
-  /**
-   * Add DOM event listener that will be auto-cleaned on shutdown
-   * @param {Element} target - DOM element
-   * @param {string} event - Event name
-   * @param {Function} handler - Event handler
-   */
-  addDOMListener(target, event, handler) {
-    this.customListeners.push({ target, event, handler })
-    target.addEventListener(event, handler)
-  }
-
-  /**
-   * Create tracked interval (auto-cleared on shutdown)
-   * @param {Function} callback
-   * @param {number} delay
-   * @returns {number} Interval ID
-   */
-  createInterval(callback, delay) {
-    const id = setInterval(callback, delay)
-    this.customIntervals.push(id)
-    return id
-  }
-
-  /**
-   * Create tracked timeout (auto-cleared on shutdown)
-   * @param {Function} callback
-   * @param {number} delay
-   * @returns {number} Timeout ID
-   */
-  createTimeout(callback, delay) {
-    const id = setTimeout(callback, delay)
-    this.customTimeouts.push(id)
-    return id
-  }
-
-  // ==========================================================================
-  // SCENE TRANSITION HELPERS
-  // ==========================================================================
-
-  /**
-   * Transition to another scene with fade effect
-   * @param {string} sceneName - Target scene key
-   * @param {Object} data - Data to pass to target scene
-   * @param {number} duration - Fade duration in ms (default: 300)
-   */
-  transitionTo(sceneName, data = {}, duration = 300) {
-    // Prevent double transitions
-    if (this.isTransitioning) return
-    this.isTransitioning = true
-
-    // Fade out
-    this.cameras.main.fade(duration, 0, 0, 0)
-
-    this.time.delayedCall(duration, () => {
-      this.scene.start(sceneName, data)
-    })
-  }
-
-  /**
-   * Go back to previous scene (or GameScene by default)
-   * @param {Object} data - Data to pass back
-   */
-  goBack(data = {}) {
-    const returnScene = this.initData?.returnScene || 'GameScene'
-    this.transitionTo(returnScene, { ...data, from: this.scene.key })
-  }
-
-  /**
-   * Launch overlay scene (keeps current scene active)
-   * @param {string} sceneName - Overlay scene key
-   * @param {Object} data - Data to pass
-   */
-  launchOverlay(sceneName, data = {}) {
-    this.scene.launch(sceneName, {
-      ...data,
-      returnScene: this.scene.key
-    })
-    this.scene.pause()
   }
 
   /**
@@ -322,7 +91,7 @@ export class BaseScene extends Phaser.Scene {
   }
 
   // ==========================================================================
-  // UI HELPERS
+  // GAME-THEMED UI HELPERS
   // ==========================================================================
 
   /**
@@ -405,43 +174,20 @@ export class BaseScene extends Phaser.Scene {
   }
 
   /**
-   * Show loading indicator
-   * @param {string} message - Loading message
-   * @returns {Phaser.GameObjects.Container}
+   * Get terminal style for consistent theming
+   * @param {string} size - Size variant (sm, md, lg)
+   * @returns {Object} Text style object
    */
-  showLoading(message = 'Loading...') {
-    const container = this.add.container(this.centerX, this.centerY)
-      .setDepth(9999)
-
-    const bg = this.add.rectangle(0, 0, 200, 80, 0x000000, 0.8)
-    const text = this.add.text(0, 0, message, {
-      fontSize: '16px',
-      color: '#ffffff'
-    }).setOrigin(0.5)
-
-    container.add([bg, text])
-    container.setData('loadingIndicator', true)
-
-    // Pulse animation
-    this.tweens.add({
-      targets: text,
-      alpha: 0.5,
-      duration: 500,
-      yoyo: true,
-      repeat: -1
-    })
-
-    return container
+  getTerminalStyle(size = 'md') {
+    return getTerminalStyle(size)
   }
 
   /**
-   * Hide loading indicator
+   * Get depth constants for layering
+   * @returns {Object} DEPTH constants
    */
-  hideLoading() {
-    const loadingIndicators = this.children.list.filter(
-      child => child.getData && child.getData('loadingIndicator')
-    )
-    loadingIndicators.forEach(indicator => indicator.destroy())
+  get DEPTH() {
+    return DEPTH
   }
 }
 
