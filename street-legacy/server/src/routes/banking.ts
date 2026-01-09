@@ -4,33 +4,44 @@ import { withTransaction, lockRowForUpdate } from '../db/transaction.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { validate } from '../validation/validate.middleware.js';
 import { z } from 'zod';
+import { eventPipeline } from '../services/eventPipeline.service.js';
 
 const router = Router();
 
-// Validation schemas
+// Validation schemas with operationId support
 const loanAmountSchema = z.object({
   body: z.object({
-    amount: z.coerce.number().int().positive('Amount must be positive').max(999999999, 'Amount too large')
+    amount: z.coerce.number().int().positive('Amount must be positive').max(999999999, 'Amount too large'),
+    operationId: z.string().uuid().optional()
   })
 });
 
 const loanPaymentSchema = z.object({
   body: z.object({
     loanId: z.coerce.number().int().positive('Invalid loan ID'),
-    amount: z.coerce.number().int().positive('Amount must be positive').max(999999999, 'Amount too large')
+    amount: z.coerce.number().int().positive('Amount must be positive').max(999999999, 'Amount too large'),
+    operationId: z.string().uuid().optional()
   })
 });
 
 const safeTierSchema = z.object({
   body: z.object({
-    tier: z.coerce.number().int().min(1, 'Tier must be at least 1').max(5, 'Tier must be at most 5')
+    tier: z.coerce.number().int().min(1, 'Tier must be at least 1').max(5, 'Tier must be at most 5'),
+    operationId: z.string().uuid().optional()
   })
 });
 
 const safeAmountSchema = z.object({
   body: z.object({
-    amount: z.coerce.number().int().positive('Amount must be positive').max(999999999, 'Amount too large')
+    amount: z.coerce.number().int().positive('Amount must be positive').max(999999999, 'Amount too large'),
+    operationId: z.string().uuid().optional()
   })
+});
+
+const collectInterestSchema = z.object({
+  body: z.object({
+    operationId: z.string().uuid().optional()
+  }).optional()
 });
 
 router.use(authMiddleware);
@@ -138,7 +149,18 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 router.post('/loan/take', validate(loanAmountSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
-    const { amount } = req.body;
+    const { amount, operationId } = req.body;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock player row to prevent race conditions
@@ -184,7 +206,29 @@ router.post('/loan/take', validate(loanAmountSchema), async (req: AuthRequest, r
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'WITHDRAW_FUNDS',
+          params: { action: 'loan_take', amount },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'WITHDRAW_FUNDS' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Banking] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Take loan error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to process loan' });
@@ -196,7 +240,18 @@ router.post('/loan/take', validate(loanAmountSchema), async (req: AuthRequest, r
 router.post('/loan/pay', validate(loanPaymentSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
-    const { loanId, amount } = req.body;
+    const { loanId, amount, operationId } = req.body;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock player row to prevent race conditions
@@ -243,7 +298,29 @@ router.post('/loan/pay', validate(loanPaymentSchema), async (req: AuthRequest, r
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'DEPOSIT_FUNDS',
+          params: { action: 'loan_pay', loanId, amount: result.paymentAmount },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'DEPOSIT_FUNDS' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Banking] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Pay loan error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to process payment' });
@@ -251,9 +328,21 @@ router.post('/loan/pay', validate(loanPaymentSchema), async (req: AuthRequest, r
 });
 
 // POST /api/banking/interest/collect - Collect interest on bank balance
-router.post('/interest/collect', async (req: AuthRequest, res: Response) => {
+router.post('/interest/collect', validate(collectInterestSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
+    const operationId = req.body?.operationId;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock player row
@@ -304,7 +393,29 @@ router.post('/interest/collect', async (req: AuthRequest, res: Response) => {
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'COLLECT_INCOME',
+          params: { action: 'interest', amount: result.interestEarned },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'COLLECT_INCOME' as const,
+          data: result,
+          playerState: { cash: 0, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Banking] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Collect interest error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to collect interest' });
@@ -316,7 +427,18 @@ router.post('/interest/collect', async (req: AuthRequest, res: Response) => {
 router.post('/safe/rent', validate(safeTierSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
-    const { tier } = req.body;
+    const { tier, operationId } = req.body;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const tierInfo = SAFE_DEPOSIT_TIERS.find(t => t.tier === tier);
     if (!tierInfo) {
@@ -377,7 +499,29 @@ router.post('/safe/rent', validate(safeTierSchema), async (req: AuthRequest, res
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'DEPOSIT_FUNDS',
+          params: { action: 'safe_rent', tier },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'DEPOSIT_FUNDS' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Banking] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Rent safe error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to rent safe' });
@@ -389,7 +533,18 @@ router.post('/safe/rent', validate(safeTierSchema), async (req: AuthRequest, res
 router.post('/safe/deposit', validate(safeAmountSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
-    const { amount } = req.body;
+    const { amount, operationId } = req.body;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock both player and safe to prevent race conditions
@@ -430,11 +585,34 @@ router.post('/safe/deposit', validate(safeAmountSchema), async (req: AuthRequest
         message: `Stored $${amount.toLocaleString()} in safe deposit box`,
         amount,
         newProtected: safe.protected_cash + amount,
-        capacity: safe.capacity
+        capacity: safe.capacity,
+        newCash: player.cash - amount
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'DEPOSIT_FUNDS',
+          params: { action: 'safe_deposit', amount },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'DEPOSIT_FUNDS' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Banking] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Safe deposit error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to deposit in safe' });
@@ -446,7 +624,18 @@ router.post('/safe/deposit', validate(safeAmountSchema), async (req: AuthRequest
 router.post('/safe/withdraw', validate(safeAmountSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
-    const { amount } = req.body;
+    const { amount, operationId } = req.body;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock both player and safe to prevent race conditions
@@ -473,19 +662,42 @@ router.post('/safe/withdraw', validate(safeAmountSchema), async (req: AuthReques
         [amount, playerId]
       );
 
-      await client.query(
-        `UPDATE players SET cash = cash + $1, protected_cash = protected_cash - $1 WHERE id = $2`,
+      const cashResult = await client.query(
+        `UPDATE players SET cash = cash + $1, protected_cash = protected_cash - $1 WHERE id = $2 RETURNING cash`,
         [amount, playerId]
       );
 
       return {
         message: `Withdrew $${amount.toLocaleString()} from safe deposit box`,
         amount,
-        newProtected: safe.protected_cash - amount
+        newProtected: safe.protected_cash - amount,
+        newCash: cashResult.rows[0].cash
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'WITHDRAW_FUNDS',
+          params: { action: 'safe_withdraw', amount },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'WITHDRAW_FUNDS' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Banking] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Safe withdraw error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to withdraw from safe' });

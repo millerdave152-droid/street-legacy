@@ -20,13 +20,43 @@ import { createEvent, LevelUpEvent, CrimeResultEvent } from '../websocket/events
 import { logDistrictEvent, getDistrictModifiers } from '../services/districtEcosystem.service.js';
 import { modifyReputation, propagateReputation } from '../services/reputationWeb.service.js';
 import { createWitnessedEvent } from '../services/witness.service.js';
+import {
+  validateMiniGameResult,
+  validateOfflineTimestamp,
+  logOfflineAction,
+  MiniGameResult,
+  OfflineSubmission,
+  MiniGameValidation
+} from '../services/crime.service.js';
+import { eventPipeline } from '../services/eventPipeline.service.js';
 
 const router = Router();
 
 // Validation schemas for game routes
 const crimeSchema = z.object({
   body: z.object({
-    crimeId: z.string().min(1, 'Crime ID required').or(z.coerce.number().int().positive())
+    crimeId: z.string().min(1, 'Crime ID required').or(z.coerce.number().int().positive()),
+    // Operation ID for idempotency (optional for backward compatibility)
+    operationId: z.string().uuid().optional(),
+    // Mini-game result for server validation
+    miniGameResult: z.object({
+      success: z.boolean(),
+      score: z.number().min(0).max(100),
+      perfectRun: z.boolean().optional(),
+      curveballsSurvived: z.number().optional(),
+      timeTaken: z.number().optional(),
+      gameType: z.string().optional()
+    }).optional(),
+    // Offline submission for sync/reconciliation
+    offlineSubmission: z.object({
+      timestamp: z.number(),
+      localResult: z.object({
+        success: z.boolean(),
+        cashGained: z.number(),
+        xpGained: z.number(),
+        heatGained: z.number()
+      })
+    }).optional()
   })
 });
 
@@ -272,7 +302,38 @@ router.post('/travel', validate(travelSchema), async (req: AuthRequest, res: Res
 router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
-    const { crimeId } = req.body;
+    const { crimeId, operationId, miniGameResult, offlineSubmission } = req.body;
+
+    // Check idempotency - if this operation was already processed, return cached result
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      console.log(`[Crime] Duplicate operation detected: ${operationId}`);
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
+
+    // Validate offline submission timestamp if present
+    if (offlineSubmission) {
+      const timestampValidation = validateOfflineTimestamp(offlineSubmission.timestamp);
+      if (!timestampValidation.valid) {
+        res.status(400).json({
+          success: false,
+          error: `Offline submission rejected: ${timestampValidation.reason}`,
+          offlineRejected: true
+        });
+        return;
+      }
+    }
+
+    // Validate mini-game result if present
+    let miniGameValidation: MiniGameValidation | undefined;
+    if (miniGameResult) {
+      miniGameValidation = await validateMiniGameResult(playerId, String(crimeId), miniGameResult);
+    }
 
     // Get crime first (doesn't need transaction)
     // Query crime_types table (the actual table name in migrations)
@@ -453,6 +514,12 @@ router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Respo
         const districtCrimeModifier = districtMods?.crimeDifficulty ?? 1.0;
         successRate = crime.base_success_rate * policeModifier * districtCrimeModifier;
         successRate += equipSuccessBonus + prestigeBonuses.successRate + eventBonuses.successBonus;
+
+        // Apply mini-game bonus if validated (up to +20%)
+        if (miniGameValidation?.accepted) {
+          successRate += miniGameValidation.bonusApplied;
+        }
+
         successRate = Math.min(95, successRate); // Cap at 95%
         const roll = Math.random() * 100;
         success = roll < successRate;
@@ -571,38 +638,108 @@ router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Respo
       };
     });
 
+    // Calculate offline reconciliation if this was an offline submission
+    let offlineReconciliation: {
+      serverDiffered: boolean;
+      adjustments: { cash: number; xp: number; heat: number };
+    } | undefined;
+
+    if (offlineSubmission) {
+      const localResult = offlineSubmission.localResult;
+      const serverDiffered =
+        localResult.success !== result.crimeSuccess ||
+        localResult.cashGained !== result.cashGained ||
+        Math.abs(localResult.heatGained - result.heatGenerated) > 5;
+
+      offlineReconciliation = {
+        serverDiffered,
+        adjustments: {
+          cash: result.cashGained - localResult.cashGained,
+          xp: result.xpGained - localResult.xpGained,
+          heat: result.heatGenerated - localResult.heatGained
+        }
+      };
+    }
+
     // Send response immediately - don't wait for non-critical background tasks
+    const responseData = {
+      crimeSuccess: result.crimeSuccess,
+      cashGained: result.cashGained,
+      xpGained: result.xpGained,
+      caught: result.caught,
+      jailUntil: result.jailUntil,
+      leveledUp: result.leveledUp,
+      newLevel: result.newLevel,
+      newAchievements: [], // Achievements are now processed in background
+      activeBonuses: {
+        territoryBonus: result.territoryBonus > 0,
+        eventBonuses: result.eventBonuses.payoutBonus > 0 || result.eventBonuses.xpBonus > 0 || result.eventBonuses.successBonus > 0,
+        miniGameBonus: miniGameValidation?.accepted ? miniGameValidation.bonusApplied : 0
+      },
+      player: {
+        stamina: result.newStamina,
+        focus: result.newFocus,
+        heat: result.newHeat,
+        energy: result.newEnergy,
+        nerve: result.newNerve,
+        cash: result.newCash,
+        xp: result.leveledUp ? result.xpRemaining : result.newXP,
+        level: result.newLevel,
+        totalEarnings: result.newTotalEarnings,
+        inJail: result.caught,
+        jailReleaseAt: result.jailUntil
+      },
+      heatGained: result.isMaster ? 0 : result.heatGenerated,
+      // Mini-game validation result
+      miniGameValidation: miniGameValidation ? {
+        accepted: miniGameValidation.accepted,
+        bonusApplied: miniGameValidation.bonusApplied,
+        reason: miniGameValidation.reason
+      } : undefined,
+      // Offline reconciliation result
+      offlineReconciliation
+    };
+
     res.json({
       success: true,
-      data: {
-        crimeSuccess: result.crimeSuccess,
-        cashGained: result.cashGained,
-        xpGained: result.xpGained,
-        caught: result.caught,
-        jailUntil: result.jailUntil,
-        leveledUp: result.leveledUp,
-        newLevel: result.newLevel,
-        newAchievements: [], // Achievements are now processed in background
-        activeBonuses: {
-          territoryBonus: result.territoryBonus > 0,
-          eventBonuses: result.eventBonuses.payoutBonus > 0 || result.eventBonuses.xpBonus > 0 || result.eventBonuses.successBonus > 0
-        },
-        player: {
-          stamina: result.newStamina,
-          focus: result.newFocus,
-          heat: result.newHeat,
-          energy: result.newEnergy,
-          nerve: result.newNerve,
-          cash: result.newCash,
-          xp: result.leveledUp ? result.xpRemaining : result.newXP,
-          level: result.newLevel,
-          totalEarnings: result.newTotalEarnings,
-          inJail: result.caught,
-          jailReleaseAt: result.jailUntil
-        },
-        heatGained: result.isMaster ? 0 : result.heatGenerated
-      }
+      operationId: operationId || undefined,
+      data: responseData
     });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'COMMIT_CRIME',
+          params: { crimeId, miniGameResult: !!miniGameResult, offlineSubmission: !!offlineSubmission },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'COMMIT_CRIME' as const,
+          data: responseData,
+          playerState: {
+            cash: result.newCash,
+            xp: result.newXP,
+            heat: result.newHeat,
+            energy: result.newEnergy
+          }
+        }),
+        {
+          playerId,
+          districtId: result.districtId ? parseInt(result.districtId) : undefined,
+          isNewsworthy: result.crimeSuccess && result.cashGained > 10000,
+          newsSignificance: Math.min(9, Math.ceil(result.cashGained / 5000))
+        },
+        {
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent')
+        }
+      ).catch(err => console.error('[Crime] Audit log error:', err));
+    }
 
     // Send WebSocket updates for real-time client sync
     notifyStatUpdate(playerId, {
@@ -656,7 +793,7 @@ router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Respo
             await modifyReputation(
               String(playerId),
               'district',
-              result.districtId,
+              result.districtId!,
               {
                 respect: 2 + crimeScale,
                 fear: 1 + Math.floor(crimeScale / 2),
@@ -669,7 +806,7 @@ router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Respo
             await modifyReputation(
               String(playerId),
               'district',
-              result.districtId,
+              result.districtId!,
               {
                 respect: -2,
                 heat: result.caught ? 5 : 2
@@ -681,7 +818,7 @@ router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Respo
           await propagateReputation(
             String(playerId),
             'district',
-            result.districtId,
+            result.districtId!,
             result.crimeSuccess
               ? { respect: 2 + crimeScale, fear: 1 + Math.floor(crimeScale / 2) }
               : { respect: -2 }
@@ -705,7 +842,7 @@ router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Respo
             await createWitnessedEvent({
               eventType: 'crime_committed',
               actorPlayerId: playerId,
-              districtId: result.districtId,
+              districtId: result.districtId!,
               description: `${playerName} committed a ${result.crimeCategory || 'crime'} and made off with $${result.cashGained.toLocaleString()}`,
               severity,
               metadata: {
@@ -718,7 +855,22 @@ router.post('/crime', validate(crimeSchema), async (req: AuthRequest, res: Respo
         } catch (err) {
           console.error('Witnessed event creation error:', err);
         }
-      })() : Promise.resolve()
+      })() : Promise.resolve(),
+      // Log offline action for audit trail
+      offlineSubmission ? logOfflineAction(
+        playerId,
+        'crime',
+        { crimeId, miniGameResult },
+        offlineSubmission.localResult,
+        {
+          success: result.crimeSuccess,
+          cashGained: result.cashGained,
+          xpGained: result.xpGained,
+          heatGained: result.heatGenerated
+        },
+        offlineSubmission.timestamp,
+        offlineReconciliation
+      ).catch(err => console.error('Offline action log error:', err)) : Promise.resolve()
     ]).catch(err => console.error('Background tasks error:', err));
   } catch (error: any) {
     console.error('Crime error:', error);

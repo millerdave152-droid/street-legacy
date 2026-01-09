@@ -5,12 +5,29 @@ import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { validate } from '../validation/validate.middleware.js';
 import { z } from 'zod';
 import { logDistrictEvent } from '../services/districtEcosystem.service.js';
+import { eventPipeline } from '../services/eventPipeline.service.js';
 
 // Schema for property ID params
 const propertyIdParamSchema = z.object({
   params: z.object({
     propertyId: z.string().regex(/^\d+$/, 'Invalid property ID')
   })
+});
+
+// Schema for property operations with operationId
+const propertyOperationSchema = z.object({
+  params: z.object({
+    propertyId: z.string().regex(/^\d+$/, 'Invalid property ID')
+  }),
+  body: z.object({
+    operationId: z.string().uuid().optional()
+  }).optional()
+});
+
+const collectSchema = z.object({
+  body: z.object({
+    operationId: z.string().uuid().optional()
+  }).optional()
 });
 
 const router = Router();
@@ -117,10 +134,22 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/properties/buy/:propertyId - Purchase a property
-router.post('/buy/:propertyId', validate(propertyIdParamSchema), async (req: AuthRequest, res: Response) => {
+router.post('/buy/:propertyId', validate(propertyOperationSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
     const propertyId = parseInt(req.params.propertyId);
+    const operationId = req.body?.operationId;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     // Get property first (doesn't need lock)
     const propertyResult = await pool.query(
@@ -177,16 +206,45 @@ router.post('/buy/:propertyId', validate(propertyIdParamSchema), async (req: Aut
         [playerId, propertyId]
       );
 
+      // Get updated player cash
+      const cashResult = await client.query(
+        `SELECT cash FROM players WHERE id = $1`,
+        [playerId]
+      );
+
       return {
         message: `You purchased ${property.name}!`,
         propertyName: property.name,
         cost: isMaster ? 0 : property.purchase_price,
         dailyIncome: property.daily_income,
-        districtId: property.district_id
+        districtId: property.district_id,
+        newCash: cashResult.rows[0].cash
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'BUY_PROPERTY',
+          params: { propertyId, propertyName: result.propertyName },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'BUY_PROPERTY' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Property] Audit log error:', err));
+    }
 
     // Log district ecosystem event (non-blocking)
     if (result.districtId) {
@@ -213,9 +271,21 @@ router.post('/buy/:propertyId', validate(propertyIdParamSchema), async (req: Aut
 });
 
 // POST /api/properties/collect - Collect income from all properties
-router.post('/collect', async (req: AuthRequest, res: Response) => {
+router.post('/collect', validate(collectSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
+    const operationId = req.body?.operationId;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock player row
@@ -255,8 +325,8 @@ router.post('/collect', async (req: AuthRequest, res: Response) => {
       }
 
       // Update player cash and reset collection time
-      await client.query(
-        `UPDATE players SET cash = cash + $1 WHERE id = $2`,
+      const cashResult = await client.query(
+        `UPDATE players SET cash = cash + $1 WHERE id = $2 RETURNING cash`,
         [totalCollected, playerId]
       );
 
@@ -268,11 +338,34 @@ router.post('/collect', async (req: AuthRequest, res: Response) => {
       return {
         message: `Collected $${totalCollected.toLocaleString()} from your properties!`,
         amount: totalCollected,
-        propertiesCount: propertiesResult.rows.length
+        propertiesCount: propertiesResult.rows.length,
+        newCash: cashResult.rows[0].cash
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'COLLECT_INCOME',
+          params: { propertiesCount: result.propertiesCount, amount: result.amount },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'COLLECT_INCOME' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Property] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Collect income error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to collect income' });
@@ -280,10 +373,22 @@ router.post('/collect', async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/properties/upgrade/:propertyId - Upgrade a property
-router.post('/upgrade/:propertyId', validate(propertyIdParamSchema), async (req: AuthRequest, res: Response) => {
+router.post('/upgrade/:propertyId', validate(propertyOperationSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
     const propertyId = parseInt(req.params.propertyId);
+    const operationId = req.body?.operationId;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock player row
@@ -333,6 +438,12 @@ router.post('/upgrade/:propertyId', validate(propertyIdParamSchema), async (req:
         [playerId, propertyId]
       );
 
+      // Get updated cash
+      const cashResult = await client.query(
+        `SELECT cash FROM players WHERE id = $1`,
+        [playerId]
+      );
+
       const newLevel = owned.upgrade_level + 1;
       const newMultiplier = 1 + (newLevel - 1) * 0.25;
       const newDailyIncome = Math.floor(owned.daily_income * newMultiplier);
@@ -342,11 +453,34 @@ router.post('/upgrade/:propertyId', validate(propertyIdParamSchema), async (req:
         propertyName: owned.name,
         newLevel,
         cost: isMaster ? 0 : upgradeCost,
-        newDailyIncome
+        newDailyIncome,
+        newCash: cashResult.rows[0].cash
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'UPGRADE_PROPERTY',
+          params: { propertyId, propertyName: result.propertyName, newLevel: result.newLevel },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'UPGRADE_PROPERTY' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Property] Audit log error:', err));
+    }
   } catch (error: any) {
     console.error('Upgrade property error:', error);
     res.status(400).json({ success: false, error: error.message || 'Failed to upgrade property' });
@@ -354,10 +488,22 @@ router.post('/upgrade/:propertyId', validate(propertyIdParamSchema), async (req:
 });
 
 // POST /api/properties/sell/:propertyId - Sell a property
-router.post('/sell/:propertyId', validate(propertyIdParamSchema), async (req: AuthRequest, res: Response) => {
+router.post('/sell/:propertyId', validate(propertyOperationSchema), async (req: AuthRequest, res: Response) => {
   try {
     const playerId = req.player!.id;
     const propertyId = parseInt(req.params.propertyId);
+    const operationId = req.body?.operationId;
+
+    // Idempotency check
+    if (operationId && eventPipeline.isOperationProcessed(operationId)) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        operationId,
+        message: 'Operation already processed'
+      });
+      return;
+    }
 
     const result = await withTransaction(async (client) => {
       // Lock player row
@@ -391,8 +537,8 @@ router.post('/sell/:propertyId', validate(propertyIdParamSchema), async (req: Au
         [playerId, propertyId]
       );
 
-      await client.query(
-        `UPDATE players SET cash = cash + $1 WHERE id = $2`,
+      const cashResult = await client.query(
+        `UPDATE players SET cash = cash + $1 WHERE id = $2 RETURNING cash`,
         [sellPrice, playerId]
       );
 
@@ -400,11 +546,34 @@ router.post('/sell/:propertyId', validate(propertyIdParamSchema), async (req: Au
         message: `Sold ${owned.name} for $${sellPrice.toLocaleString()}!`,
         propertyName: owned.name,
         sellPrice,
-        districtId: owned.district_id
+        districtId: owned.district_id,
+        newCash: cashResult.rows[0].cash
       };
     });
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, operationId: operationId || undefined, data: result });
+
+    // Log to audit trail (async, non-blocking)
+    if (operationId) {
+      eventPipeline.processIntent(
+        playerId,
+        {
+          operationId,
+          type: 'SELL_PROPERTY',
+          params: { propertyId, propertyName: result.propertyName },
+          timestamp: Date.now()
+        },
+        async () => ({
+          success: true,
+          operationId,
+          type: 'SELL_PROPERTY' as const,
+          data: result,
+          playerState: { cash: result.newCash, xp: 0, heat: 0, energy: 0 }
+        }),
+        { playerId },
+        { ipAddress: req.ip, userAgent: req.get('User-Agent') }
+      ).catch(err => console.error('[Property] Audit log error:', err));
+    }
 
     // Log district ecosystem event (non-blocking)
     if (result.districtId) {

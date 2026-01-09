@@ -83,6 +83,29 @@ export type WSEventType =
   | 'heist:ready'
   | 'heist:executed'
   | 'heist:cancelled'
+  | 'heist:room_created'
+  | 'heist:room_state_sync'
+  | 'heist:member_ready'
+  | 'heist:role_selected'
+  | 'heist:countdown_started'
+  | 'heist:result'
+
+  // World state events
+  | 'world:district_heat_update'
+  | 'world:market_prices'
+  | 'world:event_started'
+  | 'world:event_ended'
+  | 'world:news'
+  | 'world:leaderboard_change'
+
+  // District events
+  | 'district:heat_changed'
+  | 'district:player_entered'
+  | 'district:player_left'
+  | 'district:event_active'
+
+  // Crew heist events
+  | 'crew:heist_completed'
 
   // Notification events
   | 'notification'
@@ -522,6 +545,157 @@ export interface DistrictPlayersEvent extends BaseWSEvent {
   }>;
 }
 
+// World state events
+export interface WorldDistrictHeatUpdateEvent extends BaseWSEvent {
+  type: 'world:district_heat_update';
+  districts: Array<{
+    id: number;
+    name: string;
+    heat: number;
+    trend: 'rising' | 'falling' | 'stable';
+  }>;
+}
+
+export interface WorldMarketPricesEvent extends BaseWSEvent {
+  type: 'world:market_prices';
+  goods: Array<{
+    id: string;
+    name: string;
+    buyPrice: number;
+    sellPrice: number;
+    trend: 'up' | 'down' | 'stable';
+  }>;
+}
+
+export interface WorldEventStartedEvent extends BaseWSEvent {
+  type: 'world:event_started';
+  eventId: string;
+  eventType: string;
+  districtId?: number;
+  districtName?: string;
+  duration: number;
+  description: string;
+}
+
+export interface WorldEventEndedEvent extends BaseWSEvent {
+  type: 'world:event_ended';
+  eventId: string;
+  results?: {
+    participants: number;
+    rewards?: string;
+  };
+}
+
+export interface WorldNewsEvent extends BaseWSEvent {
+  type: 'world:news';
+  headline: string;
+  category: 'crime' | 'economy' | 'politics' | 'social';
+  significance: number;
+  districtId?: number;
+}
+
+export interface WorldLeaderboardChangeEvent extends BaseWSEvent {
+  type: 'world:leaderboard_change';
+  category: 'wealth' | 'level' | 'reputation';
+  top: Array<{
+    rank: number;
+    playerId: number;
+    username: string;
+    value: number;
+  }>;
+}
+
+// District events
+export interface DistrictHeatChangedEvent extends BaseWSEvent {
+  type: 'district:heat_changed';
+  heat: number;
+  delta: number;
+  cause: 'criminal_activity' | 'police_raid' | 'time_decay';
+}
+
+export interface DistrictPlayerEnteredEvent extends BaseWSEvent {
+  type: 'district:player_entered';
+  username: string;
+}
+
+export interface DistrictPlayerLeftEvent extends BaseWSEvent {
+  type: 'district:player_left';
+  username: string;
+}
+
+export interface DistrictEventActiveEvent extends BaseWSEvent {
+  type: 'district:event_active';
+  event: {
+    id: string;
+    type: string;
+    endsAt: number;
+    description: string;
+  };
+}
+
+// Crew heist events
+export interface CrewHeistCompletedEvent extends BaseWSEvent {
+  type: 'crew:heist_completed';
+  heistId: string;
+  success: boolean;
+  payout?: number;
+}
+
+// Heist room events
+export interface HeistRoomCreatedEvent extends BaseWSEvent {
+  type: 'heist:room_created';
+  roomId: string;
+  heistId: string;
+  leaderId: number;
+  leaderName: string;
+}
+
+export interface HeistRoomStateSyncEvent extends BaseWSEvent {
+  type: 'heist:room_state_sync';
+  roomId: string;
+  state: 'waiting' | 'ready' | 'executing' | 'completed';
+  members: Array<{
+    playerId: number;
+    username: string;
+    role?: string;
+    ready: boolean;
+  }>;
+}
+
+export interface HeistMemberReadyEvent extends BaseWSEvent {
+  type: 'heist:member_ready';
+  roomId: string;
+  playerId: number;
+  username: string;
+  ready: boolean;
+}
+
+export interface HeistRoleSelectedEvent extends BaseWSEvent {
+  type: 'heist:role_selected';
+  roomId: string;
+  playerId: number;
+  username: string;
+  role: string;
+}
+
+export interface HeistCountdownStartedEvent extends BaseWSEvent {
+  type: 'heist:countdown_started';
+  roomId: string;
+  startsAt: number;
+}
+
+export interface HeistResultEvent extends BaseWSEvent {
+  type: 'heist:result';
+  roomId: string;
+  success: boolean;
+  payout: number;
+  memberPayouts: Array<{
+    playerId: number;
+    amount: number;
+    xpGained: number;
+  }>;
+}
+
 // ============================================================================
 // Client -> Server Message Types
 // ============================================================================
@@ -602,7 +776,28 @@ export type ServerEvent =
   | NotificationEvent
   | SystemNotificationEvent
   | OnlineCountEvent
-  | DistrictPlayersEvent;
+  | DistrictPlayersEvent
+  // World state events
+  | WorldDistrictHeatUpdateEvent
+  | WorldMarketPricesEvent
+  | WorldEventStartedEvent
+  | WorldEventEndedEvent
+  | WorldNewsEvent
+  | WorldLeaderboardChangeEvent
+  // District events
+  | DistrictHeatChangedEvent
+  | DistrictPlayerEnteredEvent
+  | DistrictPlayerLeftEvent
+  | DistrictEventActiveEvent
+  // Crew heist events
+  | CrewHeistCompletedEvent
+  // Heist room events
+  | HeistRoomCreatedEvent
+  | HeistRoomStateSyncEvent
+  | HeistMemberReadyEvent
+  | HeistRoleSelectedEvent
+  | HeistCountdownStartedEvent
+  | HeistResultEvent;
 
 // ============================================================================
 // Channel Types
