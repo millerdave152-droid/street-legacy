@@ -14,6 +14,7 @@ import { registerDefenseCommands } from './DefenseCommands'
 import { registerOpportunityCommands } from './OpportunityCommands'
 import { registerSettingsCommands } from './SettingsCommands'
 import { registerMarketCommands } from './MarketCommands'
+import { registerTerritoryCommands } from './TerritoryCommands'
 import { terminalNPCManager } from '../../managers/TerminalNPCManager'
 import { heatEventSystem } from '../../managers/HeatEventSystem'
 import { playerReputationManager } from '../../managers/PlayerReputationManager'
@@ -67,6 +68,9 @@ export function registerAllCommands() {
 
   // Market commands (buy, sell, listings)
   registerMarketCommands()
+
+  // Territory and contract commands (invest, contracts)
+  registerTerritoryCommands()
 
   // Initialize NPC manager for random messages
   terminalNPCManager.initialize()

@@ -271,11 +271,11 @@ router.post('/:id/buy', async (req: AuthRequest, res: Response) => {
 
     if (listingResult.rows.length > 0) {
       const listing = listingResult.rows[0];
-      sendToUser(listing.seller_id, createNotification({
-        title: 'Item Sold!',
-        message: `${listing.buyer_username} purchased your "${listing.title}" for $${parseInt(purchaseResult.amount_paid).toLocaleString()}`,
-        type: 'success'
-      }));
+      sendToUser(listing.seller_id, createNotification(
+        'success',
+        'Item Sold!',
+        `${listing.buyer_username} purchased your "${listing.title}" for $${parseInt(purchaseResult.amount_paid).toLocaleString()}`
+      ));
     }
 
     res.json({
