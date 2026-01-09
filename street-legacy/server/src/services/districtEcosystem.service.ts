@@ -703,6 +703,442 @@ export async function initializeDistrictState(
   }
 }
 
+// ============================================================================
+// THRESHOLD EVENT MONITORING
+// ============================================================================
+
+/**
+ * District threshold event definition
+ */
+interface ThresholdEventType {
+  eventType: string;
+  name: string;
+  description: string;
+  triggerMetric: 'crime_index' | 'police_presence' | 'business_health' | 'street_activity' | 'crew_tension';
+  triggerThreshold: number;
+  triggerDirection: 'above' | 'below';
+  effects: Record<string, number>;
+  defaultDurationMinutes: number;
+  cooldownMinutes: number;
+  icon: string;
+  color: string;
+}
+
+/**
+ * Active district event info
+ */
+export interface ActiveDistrictEvent {
+  eventId: string;
+  eventType: string;
+  name: string;
+  description: string;
+  effects: Record<string, number>;
+  startedAt: Date;
+  expiresAt: Date;
+  timeRemainingMs: number;
+  icon: string;
+  color: string;
+}
+
+/**
+ * Triggered event result
+ */
+interface TriggeredEventResult {
+  districtId: string;
+  eventType: string;
+  eventId: string | null;
+}
+
+/**
+ * Check if a specific event type is currently active in a district
+ */
+export async function isDistrictEventActive(districtId: string, eventType: string): Promise<boolean> {
+  try {
+    const result = await pool.query(
+      `SELECT 1 FROM district_event_history
+       WHERE district_id = $1
+       AND event_type = $2
+       AND ended_at IS NULL
+       AND (expires_at IS NULL OR expires_at > NOW())`,
+      [districtId, eventType]
+    );
+    return result.rows.length > 0;
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error checking active event:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if an event is on cooldown for a district
+ */
+export async function isDistrictEventOnCooldown(districtId: string, eventType: string): Promise<boolean> {
+  try {
+    const result = await pool.query(
+      `SELECT det.cooldown_minutes, MAX(COALESCE(deh.ended_at, deh.expires_at)) as last_ended
+       FROM district_event_types det
+       LEFT JOIN district_event_history deh ON deh.event_type = det.event_type
+         AND deh.district_id = $1
+       WHERE det.event_type = $2
+       GROUP BY det.cooldown_minutes`,
+      [districtId, eventType]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].last_ended) {
+      return false;
+    }
+
+    const { cooldown_minutes, last_ended } = result.rows[0];
+    const cooldownEnds = new Date(last_ended);
+    cooldownEnds.setMinutes(cooldownEnds.getMinutes() + cooldown_minutes);
+
+    return cooldownEnds > new Date();
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error checking cooldown:', error);
+    return false;
+  }
+}
+
+/**
+ * Trigger a district event
+ */
+export async function triggerDistrictEvent(
+  districtId: string,
+  eventType: string,
+  triggeredBy: 'threshold' | 'scheduled' | 'admin' | 'player' = 'threshold',
+  triggerValue?: number,
+  triggerMetric?: string,
+  durationOverride?: number
+): Promise<string | null> {
+  console.log(`[DistrictEcosystem] Attempting to trigger ${eventType} in ${districtId}`);
+
+  try {
+    // Check if already active
+    if (await isDistrictEventActive(districtId, eventType)) {
+      console.log(`[DistrictEcosystem] Event ${eventType} already active in ${districtId}`);
+      return null;
+    }
+
+    // Check cooldown
+    if (await isDistrictEventOnCooldown(districtId, eventType)) {
+      console.log(`[DistrictEcosystem] Event ${eventType} on cooldown in ${districtId}`);
+      return null;
+    }
+
+    // Get event definition
+    const defResult = await pool.query(
+      `SELECT * FROM district_event_types WHERE event_type = $1`,
+      [eventType]
+    );
+
+    if (defResult.rows.length === 0) {
+      console.error(`[DistrictEcosystem] Unknown event type: ${eventType}`);
+      return null;
+    }
+
+    const eventDef = defResult.rows[0];
+    const duration = durationOverride || eventDef.default_duration_minutes;
+    const expiresAt = new Date();
+    expiresAt.setMinutes(expiresAt.getMinutes() + duration);
+
+    // Insert event
+    const insertResult = await pool.query(
+      `INSERT INTO district_event_history (
+        district_id, event_type, triggered_by, trigger_value, trigger_metric,
+        effects, duration_minutes, expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id`,
+      [
+        districtId,
+        eventType,
+        triggeredBy,
+        triggerValue || null,
+        triggerMetric || null,
+        eventDef.effects,
+        duration,
+        expiresAt
+      ]
+    );
+
+    const eventId = insertResult.rows[0].id;
+    console.log(`[DistrictEcosystem] Triggered event ${eventType} (${eventId}) in ${districtId}`);
+
+    // Update district_states active event
+    await pool.query(
+      `UPDATE district_states SET
+        active_event = $1,
+        event_started_at = NOW(),
+        event_expires_at = $2
+       WHERE district_id = $3`,
+      [eventType, expiresAt, districtId]
+    ).catch(() => {
+      // Columns might not exist yet if migration hasn't run
+    });
+
+    return eventId;
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error triggering event:', error);
+    return null;
+  }
+}
+
+/**
+ * End a district event
+ */
+export async function endDistrictEvent(
+  districtId: string,
+  eventType: string,
+  endedBy: 'expired' | 'admin' | 'countered' = 'expired'
+): Promise<boolean> {
+  try {
+    const result = await pool.query(
+      `UPDATE district_event_history SET
+        ended_at = NOW(),
+        ended_by = $1
+       WHERE district_id = $2
+       AND event_type = $3
+       AND ended_at IS NULL
+       RETURNING id`,
+      [endedBy, districtId, eventType]
+    );
+
+    if (result.rows.length === 0) {
+      return false;
+    }
+
+    // Clear district_states active event
+    await pool.query(
+      `UPDATE district_states SET
+        active_event = NULL,
+        event_started_at = NULL,
+        event_expires_at = NULL
+       WHERE district_id = $1`,
+      [districtId]
+    ).catch(() => {
+      // Columns might not exist yet
+    });
+
+    console.log(`[DistrictEcosystem] Ended event ${eventType} in ${districtId}`);
+    return true;
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error ending event:', error);
+    return false;
+  }
+}
+
+/**
+ * Get active events for a district
+ */
+export async function getActiveDistrictEvents(districtId: string): Promise<ActiveDistrictEvent[]> {
+  try {
+    const result = await pool.query(
+      `SELECT
+        deh.id as event_id,
+        deh.event_type,
+        det.name,
+        det.description,
+        deh.effects,
+        deh.started_at,
+        deh.expires_at,
+        det.icon,
+        det.color
+       FROM district_event_history deh
+       JOIN district_event_types det ON deh.event_type = det.event_type
+       WHERE deh.district_id = $1
+       AND deh.ended_at IS NULL
+       AND (deh.expires_at IS NULL OR deh.expires_at > NOW())`,
+      [districtId]
+    );
+
+    return result.rows.map(row => ({
+      eventId: row.event_id,
+      eventType: row.event_type,
+      name: row.name,
+      description: row.description,
+      effects: row.effects || {},
+      startedAt: row.started_at,
+      expiresAt: row.expires_at,
+      timeRemainingMs: row.expires_at ? new Date(row.expires_at).getTime() - Date.now() : 0,
+      icon: row.icon,
+      color: row.color
+    }));
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error getting active events:', error);
+    return [];
+  }
+}
+
+/**
+ * Get combined event modifiers for a district
+ */
+export async function getDistrictEventModifiers(districtId: string): Promise<Record<string, number>> {
+  try {
+    const result = await pool.query(
+      `SELECT effects FROM district_event_history
+       WHERE district_id = $1
+       AND ended_at IS NULL
+       AND (expires_at IS NULL OR expires_at > NOW())`,
+      [districtId]
+    );
+
+    const combined: Record<string, number> = {};
+    for (const row of result.rows) {
+      if (row.effects) {
+        Object.assign(combined, row.effects);
+      }
+    }
+
+    return combined;
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error getting event modifiers:', error);
+    return {};
+  }
+}
+
+/**
+ * Check and trigger threshold events for all districts
+ * Should be called periodically (e.g., every 5 minutes)
+ */
+export async function checkAllDistrictThresholds(): Promise<TriggeredEventResult[]> {
+  console.log('[DistrictEcosystem] Checking district thresholds...');
+  const triggered: TriggeredEventResult[] = [];
+
+  try {
+    // Get all district states
+    const statesResult = await pool.query(
+      `SELECT district_id, crime_index, police_presence, business_health,
+              street_activity, crew_tension
+       FROM district_states`
+    );
+
+    // Get all active event types
+    const eventTypesResult = await pool.query(
+      `SELECT * FROM district_event_types
+       WHERE is_active = true AND trigger_metric IS NOT NULL`
+    );
+
+    for (const state of statesResult.rows) {
+      for (const eventType of eventTypesResult.rows) {
+        let shouldTrigger = false;
+        let metricValue = 0;
+
+        // Get the metric value
+        switch (eventType.trigger_metric) {
+          case 'crime_index':
+            metricValue = state.crime_index;
+            break;
+          case 'police_presence':
+            metricValue = state.police_presence;
+            break;
+          case 'business_health':
+            metricValue = state.business_health;
+            break;
+          case 'street_activity':
+            metricValue = state.street_activity;
+            break;
+          case 'crew_tension':
+            metricValue = state.crew_tension;
+            break;
+        }
+
+        // Check if threshold is crossed
+        if (eventType.trigger_direction === 'above') {
+          shouldTrigger = metricValue >= eventType.trigger_threshold;
+        } else if (eventType.trigger_direction === 'below') {
+          shouldTrigger = metricValue <= eventType.trigger_threshold;
+        }
+
+        // Trigger event if threshold crossed
+        if (shouldTrigger) {
+          const eventId = await triggerDistrictEvent(
+            state.district_id,
+            eventType.event_type,
+            'threshold',
+            metricValue,
+            eventType.trigger_metric
+          );
+
+          if (eventId) {
+            triggered.push({
+              districtId: state.district_id,
+              eventType: eventType.event_type,
+              eventId
+            });
+            console.log(`[DistrictEcosystem] Threshold triggered: ${eventType.event_type} in ${state.district_id} (${eventType.trigger_metric}=${metricValue})`);
+          }
+        }
+      }
+    }
+
+    console.log(`[DistrictEcosystem] Threshold check complete. Triggered ${triggered.length} events.`);
+    return triggered;
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error checking thresholds:', error);
+    return [];
+  }
+}
+
+/**
+ * Expire ended events (cleanup)
+ */
+export async function expireDistrictEvents(): Promise<number> {
+  try {
+    const result = await pool.query(
+      `UPDATE district_event_history SET
+        ended_at = NOW(),
+        ended_by = 'expired'
+       WHERE ended_at IS NULL
+       AND expires_at < NOW()
+       RETURNING district_id, event_type`
+    );
+
+    // Clear district_states for expired events
+    for (const row of result.rows) {
+      await pool.query(
+        `UPDATE district_states SET
+          active_event = NULL,
+          event_started_at = NULL,
+          event_expires_at = NULL
+         WHERE district_id = $1 AND active_event = $2`,
+        [row.district_id, row.event_type]
+      ).catch(() => {});
+    }
+
+    console.log(`[DistrictEcosystem] Expired ${result.rows.length} events`);
+    return result.rows.length;
+  } catch (error) {
+    console.error('[DistrictEcosystem] Error expiring events:', error);
+    return 0;
+  }
+}
+
+/**
+ * Process all districts and check thresholds (combined periodic task)
+ * Should be called every 5-15 minutes
+ */
+export async function processDistrictsAndThresholds(): Promise<{
+  districtsProcessed: number;
+  eventsExpired: number;
+  eventsTriggered: TriggeredEventResult[];
+}> {
+  console.log('[DistrictEcosystem] Running periodic district processing...');
+
+  // First expire any ended events
+  const eventsExpired = await expireDistrictEvents();
+
+  // Recalculate all district states
+  const districtsProcessed = await processAllDistricts();
+
+  // Check thresholds and trigger events
+  const eventsTriggered = await checkAllDistrictThresholds();
+
+  return {
+    districtsProcessed,
+    eventsExpired,
+    eventsTriggered
+  };
+}
+
 // Export all methods as a service object for convenience
 export const districtEcosystemService = {
   logDistrictEvent,
@@ -714,7 +1150,17 @@ export const districtEcosystemService = {
   getStatusReputationMultiplier,
   getDistrictHistory,
   processAllDistricts,
-  initializeDistrictState
+  initializeDistrictState,
+  // Threshold event methods
+  isDistrictEventActive,
+  isDistrictEventOnCooldown,
+  triggerDistrictEvent,
+  endDistrictEvent,
+  getActiveDistrictEvents,
+  getDistrictEventModifiers,
+  checkAllDistrictThresholds,
+  expireDistrictEvents,
+  processDistrictsAndThresholds
 };
 
 export default districtEcosystemService;

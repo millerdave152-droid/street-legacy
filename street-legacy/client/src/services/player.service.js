@@ -451,6 +451,10 @@ class PlayerService {
     return apiRequest(`/game/leaderboard?category=${category}&limit=${limit}`)
   }
 
+  async getWeeklyLeaderboard(category = 'cash', limit = 50) {
+    return apiRequest(`/api/leaderboard/weekly/${category}?limit=${limit}`)
+  }
+
   async getPlayerRank(category = 'respect') {
     return apiRequest(`/game/rank?category=${category}`)
   }

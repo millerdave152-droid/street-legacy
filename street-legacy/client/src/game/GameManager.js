@@ -2269,6 +2269,20 @@ class GameManagerClass {
     }
   }
 
+  async getWeeklyLeaderboard(category = 'cash', limit = 50) {
+    // Use local data if enabled
+    if (this.useLocalData) {
+      return { data: [], player_rank: null }
+    }
+
+    try {
+      return await playerService.getWeeklyLeaderboard(category, limit)
+    } catch (error) {
+      console.error('Failed to get weekly leaderboard:', error)
+      return { data: [], player_rank: null }
+    }
+  }
+
   async getPlayerRank(category = 'respect') {
     // Use local data if enabled
     if (this.useLocalData) {

@@ -44,11 +44,11 @@ export class LeaderboardScene extends Phaser.Scene {
     // Constants
     this.ENTRY_HEIGHT = 60
     this.ENTRY_PADDING = 8
-    this.SCROLL_START_Y = 145
+    this.SCROLL_START_Y = 155
     this.SCROLL_END_Y = height - 70
 
-    // Category configuration
-    this.CATEGORIES = {
+    // Category configuration - All-Time categories
+    this.CATEGORIES_ALLTIME = {
       respect: {
         label: 'Respect',
         icon: '⭐',
@@ -71,6 +71,46 @@ export class LeaderboardScene extends Phaser.Scene {
         format: (val) => `Lv.${val || 1}`
       }
     }
+
+    // Weekly leaderboard categories
+    this.CATEGORIES_WEEKLY = {
+      cash: {
+        label: 'Cash',
+        icon: '💵',
+        color: 0x22c55e,
+        valueKey: 'value',
+        format: (val) => formatMoney(val || 0),
+        endpoint: '/weekly/cash'
+      },
+      heat: {
+        label: 'Heat',
+        icon: '🔥',
+        color: 0xef4444,
+        valueKey: 'value',
+        format: (val) => (val || 0).toLocaleString(),
+        endpoint: '/weekly/heat'
+      },
+      heist: {
+        label: 'Heist',
+        icon: '💎',
+        color: 0x8b5cf6,
+        valueKey: 'value',
+        format: (val) => formatMoney(val || 0),
+        endpoint: '/weekly/heist'
+      },
+      property: {
+        label: 'Property',
+        icon: '🏢',
+        color: 0x06b6d4,
+        valueKey: 'value',
+        format: (val) => formatMoney(val || 0),
+        endpoint: '/weekly/property'
+      }
+    }
+
+    // Active mode: 'alltime' or 'weekly'
+    this.leaderboardMode = 'alltime'
+    this.CATEGORIES = this.CATEGORIES_ALLTIME
 
     // Rank icons for top 3
     this.RANK_ICONS = {
@@ -109,31 +149,136 @@ export class LeaderboardScene extends Phaser.Scene {
     const { width } = this.cameras.main
 
     // Title
-    this.add.text(width / 2, 30, '🏆 LEADERBOARDS', {
-      fontSize: '24px',
+    this.add.text(width / 2, 20, '🏆 LEADERBOARDS', {
+      fontSize: '22px',
       color: '#f59e0b',
       fontFamily: 'Arial Black, Arial'
     }).setOrigin(0.5)
 
+    // Mode toggle (All-Time / Weekly)
+    this.createModeToggle()
+
     // Subtitle
-    this.subtitleText = this.add.text(width / 2, 58, 'Top players by Respect', {
+    this.subtitleText = this.add.text(width / 2, 68, 'Top players by Respect', {
       fontSize: '12px',
       color: '#888888'
     }).setOrigin(0.5)
 
     // Horizontal divider
-    this.add.rectangle(width / 2, 78, width - 40, 1, 0x333333)
+    this.add.rectangle(width / 2, 85, width - 40, 1, 0x333333)
+  }
+
+  createModeToggle() {
+    const { width } = this.cameras.main
+    const toggleY = 45
+    const toggleWidth = 85
+    const toggleSpacing = 5
+
+    this.modeToggles = {}
+
+    const modes = [
+      { key: 'alltime', label: 'All-Time' },
+      { key: 'weekly', label: 'Weekly' }
+    ]
+
+    const totalWidth = modes.length * toggleWidth + (modes.length - 1) * toggleSpacing
+    const startX = width / 2 - totalWidth / 2 + toggleWidth / 2
+
+    modes.forEach((mode, index) => {
+      const x = startX + index * (toggleWidth + toggleSpacing)
+      const isActive = mode.key === this.leaderboardMode
+
+      const bg = this.add.rectangle(x, toggleY, toggleWidth, 24, isActive ? 0xf59e0b : 0x1a1a2e, 0.95)
+        .setStrokeStyle(1, isActive ? 0xf59e0b : 0x333333)
+        .setInteractive({ useHandCursor: true })
+
+      const text = this.add.text(x, toggleY, mode.label, {
+        fontSize: '11px',
+        color: isActive ? '#000000' : '#888888',
+        fontStyle: isActive ? 'bold' : 'normal'
+      }).setOrigin(0.5)
+
+      bg.on('pointerover', () => {
+        if (this.leaderboardMode !== mode.key) {
+          bg.setFillStyle(0x2a2a4a, 0.95)
+        }
+      })
+
+      bg.on('pointerout', () => {
+        if (this.leaderboardMode !== mode.key) {
+          bg.setFillStyle(0x1a1a2e, 0.95)
+        }
+      })
+
+      bg.on('pointerdown', () => {
+        if (!this.isLoading && this.leaderboardMode !== mode.key) {
+          this.switchMode(mode.key)
+        }
+      })
+
+      this.modeToggles[mode.key] = { bg, text }
+    })
+  }
+
+  switchMode(mode) {
+    if (this.leaderboardMode === mode) return
+
+    this.leaderboardMode = mode
+    this.scrollOffset = 0
+
+    // Update mode toggle styles
+    Object.keys(this.modeToggles).forEach(key => {
+      const isActive = key === mode
+      this.modeToggles[key].bg.setFillStyle(isActive ? 0xf59e0b : 0x1a1a2e, 0.95)
+      this.modeToggles[key].bg.setStrokeStyle(1, isActive ? 0xf59e0b : 0x333333)
+      this.modeToggles[key].text.setColor(isActive ? '#000000' : '#888888')
+      this.modeToggles[key].text.setStyle({ fontStyle: isActive ? 'bold' : 'normal' })
+    })
+
+    // Switch category set
+    if (mode === 'weekly') {
+      this.CATEGORIES = this.CATEGORIES_WEEKLY
+      this.activeCategory = 'cash' // Default weekly category
+    } else {
+      this.CATEGORIES = this.CATEGORIES_ALLTIME
+      this.activeCategory = 'respect' // Default all-time category
+    }
+
+    // Rebuild tabs for new categories
+    this.rebuildTabs()
+
+    // Update subtitle
+    this.updateSubtitle()
+
+    // Reload data
+    this.loadLeaderboardData()
+  }
+
+  rebuildTabs() {
+    // Destroy old tabs
+    if (this.tabs) {
+      Object.values(this.tabs).forEach(tab => {
+        tab.bg.destroy()
+        tab.text.destroy()
+      })
+    }
+    this.tabs = {}
+
+    // Create new tabs
+    this.createTabs()
   }
 
   createTabs() {
     const { width } = this.cameras.main
-    const tabY = 105
-    const tabWidth = 100
-    const tabSpacing = 10
+    const tabY = 115
+    const tabSpacing = 8
 
     this.tabs = {}
 
     const categories = Object.keys(this.CATEGORIES)
+    // Dynamic tab width based on number of categories (3 for all-time, 4 for weekly)
+    const tabWidth = categories.length <= 3 ? 100 : 78
+
     const totalWidth = categories.length * tabWidth + (categories.length - 1) * tabSpacing
     const startX = width / 2 - totalWidth / 2 + tabWidth / 2
 
@@ -142,11 +287,11 @@ export class LeaderboardScene extends Phaser.Scene {
       const x = startX + index * (tabWidth + tabSpacing)
       const isActive = key === this.activeCategory
 
-      const bg = this.add.rectangle(x, tabY, tabWidth, 32, isActive ? config.color : 0x2a2a4a, 0.95)
+      const bg = this.add.rectangle(x, tabY, tabWidth, 30, isActive ? config.color : 0x2a2a4a, 0.95)
         .setInteractive({ useHandCursor: true })
 
       const text = this.add.text(x, tabY, `${config.icon} ${config.label}`, {
-        fontSize: '12px',
+        fontSize: '11px',
         color: '#ffffff',
         fontStyle: isActive ? 'bold' : 'normal'
       }).setOrigin(0.5)
@@ -187,11 +332,20 @@ export class LeaderboardScene extends Phaser.Scene {
       this.tabs[key].text.setStyle({ fontStyle: isActive ? 'bold' : 'normal' })
     })
 
-    // Update subtitle
-    this.subtitleText.setText(`Top players by ${this.CATEGORIES[category].label}`)
+    // Update subtitle with mode context
+    this.updateSubtitle()
 
     // Reload data
     this.loadLeaderboardData()
+  }
+
+  updateSubtitle() {
+    const config = this.CATEGORIES[this.activeCategory]
+    if (this.leaderboardMode === 'weekly') {
+      this.subtitleText.setText(`This week's top ${config.label.toLowerCase()} earners`)
+    } else {
+      this.subtitleText.setText(`Top players by ${config.label}`)
+    }
   }
 
   createCloseButton() {
@@ -324,14 +478,31 @@ export class LeaderboardScene extends Phaser.Scene {
       // Try to load from backend
       let result
       try {
-        result = await gameManager.getLeaderboard(this.activeCategory, 50)
+        if (this.leaderboardMode === 'weekly') {
+          // Call weekly API endpoint
+          result = await gameManager.getWeeklyLeaderboard(this.activeCategory, 50)
+        } else {
+          result = await gameManager.getLeaderboard(this.activeCategory, 50)
+        }
       } catch (e) {
         // Generate mock data if backend not available
         result = this.generateMockData()
       }
 
-      this.entries = result.entries || result || []
+      this.entries = result.entries || result.data || result || []
       this.playerRank = result.player_rank || null
+
+      // Normalize weekly data format
+      if (this.leaderboardMode === 'weekly' && this.entries.length > 0) {
+        this.entries = this.entries.map(entry => ({
+          rank: entry.rank,
+          player_id: entry.playerId,
+          username: entry.username || entry.displayName,
+          level: entry.level || 1,
+          value: entry.value,
+          heistName: entry.heistName || null
+        }))
+      }
 
       // If player not in entries, try to get their rank
       const player = gameManager.player
