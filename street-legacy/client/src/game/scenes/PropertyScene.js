@@ -3,7 +3,18 @@ import { gameManager } from '../GameManager'
 import { formatMoney, formatDuration } from '../../utils/formatters'
 import { playerService } from '../../services/player.service'
 import { achievementPopup } from '../ui/AchievementPopup'
-import { getPlayerData, savePlayerData, PROPERTIES } from '../data/GameData'
+import { getPlayerData, savePlayerData } from '../data/GameData'
+import {
+  PROPERTIES,
+  PROPERTY_TYPES,
+  PROPERTY_TYPE_CONFIG,
+  getPropertyById,
+  getTypeConfig,
+  calculateUpgradeCost as calcUpgradeCost,
+  calculateSellValue,
+  calculatePendingIncome
+} from '../data/PropertyData'
+import { propertyManager } from '../managers/PropertyManager'
 import { audioManager } from '../managers/AudioManager'
 import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
 
@@ -50,28 +61,19 @@ export class PropertyScene extends Phaser.Scene {
     this.SCROLL_START_Y = 195
     this.SCROLL_END_Y = height - 20
 
-    // Property type colors
-    this.TYPE_COLORS = {
-      business: 0x22c55e,  // Green
-      safehouse: 0x3b82f6, // Blue
-      front: 0x8b5cf6,     // Purple
-      default: 0x6b7280
-    }
+    // Property type colors (from PropertyData)
+    this.TYPE_COLORS = {}
+    this.TYPE_ICONS = {}
+    this.TYPE_BENEFITS = {}
 
-    // Property type icons
-    this.TYPE_ICONS = {
-      business: '🏪',
-      safehouse: '🏠',
-      front: '🎰',
-      default: '🏢'
-    }
-
-    // Property type benefits
-    this.TYPE_BENEFITS = {
-      business: { label: 'Passive Income', icon: '💰' },
-      safehouse: { label: 'Heat Reduction', icon: '🔥' },
-      front: { label: 'Money Laundering', icon: '💸' }
-    }
+    // Build lookup tables from PropertyData config
+    Object.entries(PROPERTY_TYPE_CONFIG).forEach(([key, config]) => {
+      this.TYPE_COLORS[key] = config.color
+      this.TYPE_ICONS[key] = config.icon
+      if (config.benefits) {
+        this.TYPE_BENEFITS[key] = config.benefits
+      }
+    })
 
     // State
     this.ownedProperties = []
@@ -341,47 +343,40 @@ export class PropertyScene extends Phaser.Scene {
 
   async loadPropertyData() {
     try {
-      // Try API first, fall back to local
-      let owned = []
-      let available = []
+      const player = propertyManager.getPlayer()
 
+      // Try API first for fresh data
       try {
         const [apiOwned, apiAvailable] = await Promise.all([
           gameManager.getOwnedProperties().catch(() => null),
           gameManager.getAllProperties().catch(() => null)
         ])
-        owned = apiOwned || []
-        available = apiAvailable || []
+
+        if (apiOwned && apiOwned.length > 0) {
+          // Use API data if available
+          this.ownedProperties = apiOwned.map(p => ({
+            ...p,
+            pending_income: calculatePendingIncome(p)
+          }))
+        } else {
+          // Fall back to propertyManager for local data
+          this.ownedProperties = propertyManager.getOwnedProperties(player)
+        }
+
+        if (apiAvailable && apiAvailable.length > 0) {
+          // Filter API available by what's not owned
+          const ownedIds = new Set(this.ownedProperties.map(p => p.id))
+          this.availableProperties = apiAvailable.filter(p => !ownedIds.has(p.id))
+        } else {
+          // Use propertyManager for available properties
+          this.availableProperties = propertyManager.getAvailableForPurchase(player)
+        }
       } catch (e) {
-        console.log('[PropertyScene] API failed, using local data')
+        console.log('[PropertyScene] API failed, using local data via propertyManager')
+        // Use propertyManager for all data
+        this.ownedProperties = propertyManager.getOwnedProperties(player)
+        this.availableProperties = propertyManager.getAvailableForPurchase(player)
       }
-
-      // If API failed or returned empty, use local data
-      if (available.length === 0) {
-        available = PROPERTIES
-      }
-
-      // Get owned properties from local storage
-      const player = gameManager.player || getPlayerData() || {}
-      if (owned.length === 0 && player.properties) {
-        owned = player.properties
-      }
-
-      this.ownedProperties = (owned || []).map(p => ({
-        ...p,
-        pending_income: this.calculatePendingIncome(p)
-      }))
-
-      // Filter available to exclude owned
-      const ownedIds = new Set(this.ownedProperties.map(p => p.id))
-      this.availableProperties = (available || []).filter(p => !ownedIds.has(p.id))
-
-      // Filter by player level / unlocked districts
-      const playerLevel = player?.level || 1
-      this.availableProperties = this.availableProperties.filter(p => {
-        const minLevel = p.min_level || p.required_level || 1
-        return playerLevel >= minLevel
-      })
 
       this.isLoading = false
       this.loadingText?.destroy()
@@ -389,7 +384,7 @@ export class PropertyScene extends Phaser.Scene {
       this.renderContent()
     } catch (error) {
       console.error('Failed to load property data:', error)
-      // Even on error, use local PROPERTIES
+      // Final fallback
       this.availableProperties = PROPERTIES
       this.ownedProperties = []
       this.isLoading = false
@@ -399,16 +394,9 @@ export class PropertyScene extends Phaser.Scene {
     }
   }
 
+  // Delegate to PropertyData function
   calculatePendingIncome(property) {
-    if (!property.last_collected || !property.income_per_hour) return 0
-
-    const lastCollected = new Date(property.last_collected)
-    const now = new Date()
-    const hoursSince = (now - lastCollected) / (1000 * 60 * 60)
-
-    // Cap at 24 hours of income
-    const cappedHours = Math.min(hoursSince, 24)
-    return Math.floor(cappedHours * property.income_per_hour)
+    return calculatePendingIncome(property)
   }
 
   clearContent() {
@@ -540,7 +528,7 @@ export class PropertyScene extends Phaser.Scene {
 
   renderManagePropertyCard(property, y) {
     const { width } = this.cameras.main
-    const sellValue = Math.floor((property.price || 10000) * 0.5)
+    const sellValue = calculateSellValue(property)
 
     const typeKey = (property.type || 'default').toLowerCase()
     const borderColor = this.TYPE_COLORS[typeKey] || this.TYPE_COLORS.default
@@ -697,31 +685,25 @@ export class PropertyScene extends Phaser.Scene {
 
   async sellProperty(property, sellValue) {
     try {
-      const player = gameManager.player || getPlayerData()
-
-      // Add sell value to cash
-      player.cash = (player.cash || 0) + sellValue
-
-      // Remove from owned properties locally
-      this.ownedProperties = this.ownedProperties.filter(p => p.id !== property.id)
-
-      // Try to sell via gameManager if available
+      // Try API first
       try {
         await gameManager.sellProperty(property.id)
       } catch (e) {
-        // Fallback - just update local state
-        console.log('Using local property sell')
+        // Fallback to propertyManager
+        console.log('[PropertyScene] API failed, using propertyManager for sell')
+        const result = propertyManager.sellAndSave(property.id)
+        if (!result.success) {
+          this.showErrorToast(result.error || 'Sale failed')
+          return
+        }
       }
 
-      // Save player data
-      savePlayerData(player)
-      gameManager.player = player
-
-      // Update UI
+      // Refresh data and UI
+      const player = propertyManager.getPlayer()
       this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       this.updateBenefitsDisplay()
       this.showSuccessToast(`Sold ${property.name} for ${formatMoney(sellValue)}!`)
-      this.renderContent()
+      await this.loadPropertyData()
 
       try { audioManager.playCashGain(sellValue) } catch (e) { /* ignore */ }
     } catch (error) {
@@ -1025,8 +1007,9 @@ export class PropertyScene extends Phaser.Scene {
     cardBg.on('pointerdown', () => this.showPropertyDetails(property, true))
   }
 
+  // Delegate to PropertyData function
   calculateUpgradeCost(property) {
-    return property.upgrade_cost || Math.floor((property.price || 10000) * 0.5 * (property.level || 1))
+    return calcUpgradeCost(property)
   }
 
   renderEmptyState(icon, title, message) {
@@ -1467,52 +1450,31 @@ export class PropertyScene extends Phaser.Scene {
 
   async purchaseProperty(property) {
     try {
-      await gameManager.buyProperty(property.id)
+      // Try API first
+      try {
+        await gameManager.buyProperty(property.id)
+      } catch (e) {
+        // Fallback to propertyManager
+        console.log('[PropertyScene] API failed, using propertyManager for purchase')
+        const result = propertyManager.buyAndSave(property.id)
+        if (!result.success) {
+          this.showErrorToast(result.error || 'Purchase failed')
+          return
+        }
+      }
+
+      // Refresh data and UI
+      const player = propertyManager.getPlayer()
       this.showSuccessToast(`Purchased ${property.name}!`)
-      this.cashText.setText(`Cash: ${formatMoney(gameManager.player?.cash || 0)}`)
+      this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
       this.switchTab('owned')
 
       // Check for property achievements
       this.checkAchievements()
     } catch (error) {
-      console.log('[PropertyScene] API failed, purchasing locally')
-      this.purchasePropertyLocal(property)
+      this.showErrorToast(error.message || 'Purchase failed')
     }
-  }
-
-  purchasePropertyLocal(property) {
-    const player = gameManager.player || getPlayerData() || {}
-    const price = property.price || 10000
-
-    if ((player.cash || 0) < price) {
-      this.showErrorToast('Not enough cash!')
-      return
-    }
-
-    // Deduct cash
-    player.cash = (player.cash || 0) - price
-
-    // Add to owned properties
-    if (!player.properties) player.properties = []
-    const ownedProperty = {
-      ...property,
-      purchased_at: Date.now(),
-      last_collected: Date.now(),
-      level: 1
-    }
-    player.properties.push(ownedProperty)
-
-    // Save and update
-    if (gameManager.player) {
-      Object.assign(gameManager.player, player)
-    }
-    savePlayerData(player)
-
-    this.showSuccessToast(`Purchased ${property.name}!`)
-    this.cashText.setText(`$ ${formatMoney(player.cash)}`)
-    this.loadPropertyData()
-    this.switchTab('owned')
   }
 
   async checkAchievements() {
@@ -1529,9 +1491,23 @@ export class PropertyScene extends Phaser.Scene {
 
   async upgradeProperty(property) {
     try {
-      await gameManager.upgradeProperty(property.id)
+      // Try API first
+      try {
+        await gameManager.upgradeProperty(property.id)
+      } catch (e) {
+        // Fallback to propertyManager
+        console.log('[PropertyScene] API failed, using propertyManager for upgrade')
+        const result = propertyManager.upgradeAndSave(property.id)
+        if (!result.success) {
+          this.showErrorToast(result.error || 'Upgrade failed')
+          return
+        }
+      }
+
+      // Refresh data and UI
+      const player = propertyManager.getPlayer()
       this.showSuccessToast(`${property.name} upgraded!`)
-      this.cashText.setText(`Cash: ${formatMoney(gameManager.player?.cash || 0)}`)
+      this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
     } catch (error) {
       this.showErrorToast(error.message || 'Upgrade failed')
@@ -1539,56 +1515,60 @@ export class PropertyScene extends Phaser.Scene {
   }
 
   async collectIncome(property) {
+    const pendingIncome = property.pending_income || 0
+
     try {
-      await gameManager.collectPropertyIncome(property.id)
-      this.showSuccessToast(`Collected ${formatMoney(property.pending_income)}!`)
-      this.cashText.setText(`Cash: ${formatMoney(gameManager.player?.cash || 0)}`)
+      // Try API first
+      try {
+        await gameManager.collectPropertyIncome(property.id)
+      } catch (e) {
+        // Fallback to propertyManager
+        console.log('[PropertyScene] API failed, using propertyManager for collect')
+        const result = propertyManager.collectAndSave(property.id)
+        if (!result.success) {
+          this.showErrorToast(result.error || 'Collection failed')
+          return
+        }
+      }
+
+      // Refresh data and UI
+      const player = propertyManager.getPlayer()
+      try { audioManager.playCashGain(pendingIncome) } catch (e) { /* ignore */ }
+      this.showSuccessToast(`Collected ${formatMoney(pendingIncome)}!`)
+      this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
     } catch (error) {
-      console.log('[PropertyScene] API failed, collecting locally')
-      this.collectIncomeLocal(property)
+      this.showErrorToast(error.message || 'Collection failed')
     }
   }
 
-  collectIncomeLocal(property) {
-    const player = gameManager.player || getPlayerData() || {}
-    const income = property.pending_income || 0
+  async collectAllIncome() {
+    const totalPending = this.ownedProperties.reduce((sum, p) => sum + (p.pending_income || 0), 0)
 
-    if (income <= 0) {
+    if (totalPending <= 0) {
       this.showErrorToast('No income to collect!')
       return
     }
 
-    // Add income to cash
-    player.cash = (player.cash || 0) + income
-    player.totalEarnings = (player.totalEarnings || 0) + income
-
-    // Update last collected time
-    if (player.properties) {
-      const ownedProp = player.properties.find(p => p.id === property.id)
-      if (ownedProp) {
-        ownedProp.last_collected = Date.now()
-      }
-    }
-
-    // Save and update
-    if (gameManager.player) {
-      Object.assign(gameManager.player, player)
-    }
-    savePlayerData(player)
-
-    try { audioManager.playCashGain(income) } catch (e) { /* ignore */ }
-    this.showSuccessToast(`Collected ${formatMoney(income)}!`)
-    this.cashText.setText(`$ ${formatMoney(player.cash)}`)
-    this.loadPropertyData()
-  }
-
-  async collectAllIncome() {
     try {
-      const totalPending = this.ownedProperties.reduce((sum, p) => sum + (p.pending_income || 0), 0)
-      await gameManager.collectAllPropertyIncome()
+      // Try API first
+      try {
+        await gameManager.collectAllPropertyIncome()
+      } catch (e) {
+        // Fallback to propertyManager
+        console.log('[PropertyScene] API failed, using propertyManager for collectAll')
+        const result = propertyManager.collectAllAndSave()
+        if (!result.success || result.totalAmount <= 0) {
+          this.showErrorToast('Collection failed')
+          return
+        }
+      }
+
+      // Refresh data and UI
+      const player = propertyManager.getPlayer()
+      try { audioManager.playCashGain(totalPending) } catch (e) { /* ignore */ }
       this.showSuccessToast(`Collected ${formatMoney(totalPending)}!`)
-      this.cashText.setText(`Cash: ${formatMoney(gameManager.player?.cash || 0)}`)
+      this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
     } catch (error) {
       this.showErrorToast(error.message || 'Collection failed')

@@ -92,13 +92,8 @@ export const ITEMS = [
   { id: 'bribe_money', name: 'Bribe Money', description: 'Reduces heat by 20', price: 500, category: 'consumable', effect: { heatReduction: 20 }, stackable: true },
 ]
 
-export const PROPERTIES = [
-  { id: 'apartment', name: 'Small Apartment', description: 'A place to rest', price: 5000, income_per_hour: 10, district: 'parkdale', min_level: 1 },
-  { id: 'garage', name: 'Garage', description: 'Store vehicles and goods', price: 15000, income_per_hour: 25, district: 'etobicoke', min_level: 5 },
-  { id: 'warehouse', name: 'Warehouse', description: 'Large storage facility', price: 50000, income_per_hour: 75, district: 'portlands', min_level: 10 },
-  { id: 'nightclub', name: 'Nightclub', description: 'Make money while you sleep', price: 100000, income_per_hour: 150, district: 'downtown', min_level: 15 },
-  { id: 'penthouse', name: 'Penthouse', description: 'Luxury living', price: 250000, income_per_hour: 300, district: 'yorkville', min_level: 20 },
-]
+// Re-export PROPERTIES from PropertyData for backwards compatibility
+export { PROPERTIES } from './PropertyData'
 
 // Heist data for local mode
 export const HEISTS = [
