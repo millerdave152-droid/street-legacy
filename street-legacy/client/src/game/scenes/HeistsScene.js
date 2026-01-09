@@ -407,57 +407,73 @@ export class HeistsScene extends Phaser.Scene {
   }
 
   /**
-   * Perform a planning activity
+   * Perform a planning activity (server-first with offline fallback)
    */
-  performActivity(activity, heist) {
-    const player = gameManager.player || getPlayerData()
+  async performActivity(activity, heist) {
+    const { width, height } = this.cameras.main
 
-    // Perform the activity
-    const result = performPlanningActivity(player, heist.id, activity.id)
+    try {
+      // Use GameManager's server-first approach
+      const result = await gameManager.performHeistActivity(heist.id, activity.id)
 
-    if (result.success) {
-      // Set cooldown
-      this.planningCooldowns[activity.id] = Date.now() + (activity.duration * 1000)
+      if (result.success !== false) {
+        // Set cooldown
+        this.planningCooldowns[activity.id] = Date.now() + (activity.duration * 1000)
 
-      // Track activity stats for achievements
-      if (activity.id === 'scout') {
-        player.scout_activities = (player.scout_activities || 0) + 1
-      } else if (activity.id === 'intel') {
-        player.intel_activities = (player.intel_activities || 0) + 1
+        // Track activity stats for achievements
+        const player = gameManager.player || getPlayerData()
+        if (activity.id === 'scout') {
+          player.scout_activities = (player.scout_activities || 0) + 1
+        } else if (activity.id === 'intel') {
+          player.intel_activities = (player.intel_activities || 0) + 1
+        }
+        savePlayerData(player)
+
+        // Play sound
+        try {
+          audioManager.playClick()
+        } catch (e) {}
+
+        // Show feedback
+        const message = result.message || 'Activity completed!'
+        const feedback = this.add.text(width / 2, height / 2, message, {
+          fontSize: '16px',
+          color: '#4ade80',
+          backgroundColor: '#000000aa',
+          padding: { x: 20, y: 10 }
+        }).setOrigin(0.5).setDepth(1000)
+
+        this.tweens.add({
+          targets: feedback,
+          alpha: 0,
+          y: height / 2 - 50,
+          duration: 1500,
+          onComplete: () => feedback.destroy()
+        })
+
+        // Refresh the planning UI
+        this.time.delayedCall(100, () => {
+          this.showHeistPlanning(heist)
+        })
+      } else {
+        // Show error
+        const error = this.add.text(width / 2, height / 2, result.message || 'Activity failed', {
+          fontSize: '14px',
+          color: '#ef4444',
+          backgroundColor: '#000000aa',
+          padding: { x: 20, y: 10 }
+        }).setOrigin(0.5).setDepth(1000)
+
+        this.tweens.add({
+          targets: error,
+          alpha: 0,
+          duration: 2000,
+          onComplete: () => error.destroy()
+        })
       }
-      savePlayerData(player)
-      gameManager.player = player
-
-      // Play sound
-      try {
-        audioManager.playClick()
-      } catch (e) {}
-
-      // Show feedback
-      const { width, height } = this.cameras.main
-      const feedback = this.add.text(width / 2, height / 2, result.message, {
-        fontSize: '16px',
-        color: '#4ade80',
-        backgroundColor: '#000000aa',
-        padding: { x: 20, y: 10 }
-      }).setOrigin(0.5).setDepth(1000)
-
-      this.tweens.add({
-        targets: feedback,
-        alpha: 0,
-        y: height / 2 - 50,
-        duration: 1500,
-        onComplete: () => feedback.destroy()
-      })
-
-      // Refresh the planning UI
-      this.time.delayedCall(100, () => {
-        this.showHeistPlanning(heist)
-      })
-    } else {
+    } catch (error) {
       // Show error
-      const { width, height } = this.cameras.main
-      const error = this.add.text(width / 2, height / 2, result.message, {
+      const errorText = this.add.text(width / 2, height / 2, error.message || 'Activity failed', {
         fontSize: '14px',
         color: '#ef4444',
         backgroundColor: '#000000aa',
@@ -465,10 +481,10 @@ export class HeistsScene extends Phaser.Scene {
       }).setOrigin(0.5).setDepth(1000)
 
       this.tweens.add({
-        targets: error,
+        targets: errorText,
         alpha: 0,
         duration: 2000,
-        onComplete: () => error.destroy()
+        onComplete: () => errorText.destroy()
       })
     }
   }
@@ -777,6 +793,10 @@ export class HeistsScene extends Phaser.Scene {
     this.heistCards.push(card)
   }
 
+  /**
+   * Execute a solo heist (server-first with offline fallback)
+   * Uses GameManager.executeSoloHeist which handles the server call
+   */
   async executeHeistLocal(heist) {
     const { width, height } = this.cameras.main
     const player = gameManager.player || getPlayerData()
@@ -802,10 +822,6 @@ export class HeistsScene extends Phaser.Scene {
       return
     }
 
-    // Get planning bonuses before execution
-    const planningStatus = getHeistPlanningStatus(player, heist.id, heist.difficulty || 1)
-    const planningBonuses = planningStatus.bonuses
-
     // Show execution animation
     this.children.removeAll()
 
@@ -826,235 +842,123 @@ export class HeistsScene extends Phaser.Scene {
     // Wait for animation
     await new Promise(resolve => this.time.delayedCall(2000, resolve))
 
-    // Calculate success with crew bonuses + planning bonuses
-    let modifiedSuccessRate = heist.baseSuccessRate
-    const bonuses = this.crewBonuses || {}
+    try {
+      // Execute via GameManager (server-first with offline fallback)
+      const result = await gameManager.executeSoloHeist(heist.id)
 
-    // Apply planning bonuses
-    if (planningBonuses.successBonus > 0) {
-      modifiedSuccessRate += planningBonuses.successBonus
-    }
+      executingText.destroy()
 
-    // Enforcer bonus: +violence% to success
-    if (bonuses.violence > 0) {
-      modifiedSuccessRate += bonuses.violence
-    }
-    // Driver bonus: +vehicle% for getaway-related success
-    if (bonuses.vehicle > 0) {
-      modifiedSuccessRate += Math.floor(bonuses.vehicle / 2) // Half vehicle bonus to heists
-    }
-    // Insider bonus: +intel% for planning advantage
-    if (bonuses.intel > 0) {
-      modifiedSuccessRate += bonuses.intel
-    }
+      if (result.success) {
+        const payout = result.payout || 0
 
-    // Apply crew role bonuses from heist requirements (driver, hacker, locksmith)
-    let crewRoleBonus = 0
-    if (reqCheck.bonuses && reqCheck.bonuses.length > 0) {
-      reqCheck.bonuses.forEach(bonus => {
-        if (bonus.active && bonus.value > 0) {
-          crewRoleBonus += bonus.value
-          modifiedSuccessRate += bonus.value
+        try {
+          audioManager.playCashGain(payout)
+        } catch (e) { /* ignore audio errors */ }
+
+        // Generate news for successful heist
+        generatePlayerNews('heist_success', {
+          district: player.current_district_id || 'Downtown',
+          amount: payout,
+          target: heist.name
+        })
+
+        this.add.text(width / 2, height / 2 - 60, 'HEIST SUCCESSFUL!', {
+          fontSize: '28px',
+          color: '#22c55e',
+          fontFamily: 'Arial Black, Arial'
+        }).setOrigin(0.5)
+
+        this.add.text(width / 2, height / 2, `You earned: ${formatMoney(payout)}`, {
+          fontSize: '20px',
+          color: '#ffffff'
+        }).setOrigin(0.5)
+
+        // Show bonus info if applicable
+        let yOffset = 35
+
+        // Planning bonus applied
+        if (result.planningBonusApplied) {
+          this.add.text(width / 2, height / 2 + yOffset, `📋 Planning bonus applied`, {
+            fontSize: '12px',
+            color: '#a78bfa'
+          }).setOrigin(0.5)
+          yOffset += 18
         }
-      })
-    }
 
-    // Cap at 95%
-    modifiedSuccessRate = Math.min(95, modifiedSuccessRate)
+        // Sync status indicator
+        if (result.syncStatus === 'pending') {
+          this.add.text(width / 2, height / 2 + yOffset, `⏳ Pending sync`, {
+            fontSize: '12px',
+            color: '#f59e0b'
+          }).setOrigin(0.5)
+          yOffset += 18
+        }
 
-    const successRoll = Math.random() * 100
-    const success = successRoll < modifiedSuccessRate
-    const hadCrewBonus = modifiedSuccessRate > heist.baseSuccessRate
-    const hadPlanningBonus = planningBonuses.successBonus > 0
-    const hadRoleBonus = crewRoleBonus > 0
+        // Heat display
+        if (result.heatGained !== undefined) {
+          this.add.text(width / 2, height / 2 + yOffset, `Heat: +${result.heatGained}`, {
+            fontSize: '14px',
+            color: '#ef4444'
+          }).setOrigin(0.5)
+        }
+      } else {
+        // Generate news for failed heist
+        generatePlayerNews('heist_fail', {
+          district: player.current_district_id || 'Downtown',
+          target: heist.name
+        })
 
-    executingText.destroy()
-
-    // Calculate heat with crew bonuses + planning bonuses (lookout reduces heat)
-    let heatGain = heist.heatGenerated
-    let heatReduction = 0
-    let planningHeatReduction = 0
-
-    // Apply crew lookout bonus
-    if (bonuses.heat > 0) {
-      heatReduction = Math.floor(heatGain * (bonuses.heat / 100))
-      heatGain = heatGain - heatReduction
-    }
-
-    // Apply planning heat reduction
-    if (planningBonuses.heatReduction > 0) {
-      planningHeatReduction = Math.floor(heatGain * (planningBonuses.heatReduction / 100))
-      heatGain = heatGain - planningHeatReduction
-    }
-
-    if (success) {
-      // Success - earn money
-      const payout = Math.floor(
-        Math.random() * (heist.maxPayout - heist.minPayout) + heist.minPayout
-      )
-
-      // Update player
-      player.cash += payout
-      player.heat = Math.min(100, (player.heat || 0) + heatGain)
-      player.heat_level = player.heat
-      player.xp += Math.floor(payout / 10)
-      player.heists_completed = (player.heists_completed || 0) + 1
-
-      // Track fully planned heists (all 5 activities completed)
-      const planningActivities = planningStatus.planning?.activities || {}
-      const completedActivities = Object.values(planningActivities).filter(v => v > 0).length
-      if (completedActivities >= 5) {
-        player.fully_planned_heists = (player.fully_planned_heists || 0) + 1
-      }
-
-      // Track specific heist achievements
-      if (heist.id === 'bank') {
-        player.bank_heists_completed = (player.bank_heists_completed || 0) + 1
-      } else if (heist.id === 'yacht') {
-        player.yacht_heist_completed = true
-      } else if (heist.id === 'federal_reserve') {
-        player.big_one_completed = true
-      }
-
-      // Clear planning after heist
-      clearHeistPlanning(player, heist.id)
-
-      savePlayerData(player)
-      gameManager.player = player
-
-      // Check for new achievements
-      gameManager.checkAchievements()
-
-      // Generate news for successful heist
-      generatePlayerNews('heist_success', {
-        district: player.current_district_id || 'Downtown',
-        amount: payout,
-        target: heist.name
-      })
-
-      try {
-        audioManager.playCashGain(payout)
-      } catch (e) { /* ignore audio errors */ }
-
-      this.add.text(width / 2, height / 2 - 60, 'HEIST SUCCESSFUL!', {
-        fontSize: '28px',
-        color: '#22c55e',
-        fontFamily: 'Arial Black, Arial'
-      }).setOrigin(0.5)
-
-      this.add.text(width / 2, height / 2, `You earned: ${formatMoney(payout)}`, {
-        fontSize: '20px',
-        color: '#ffffff'
-      }).setOrigin(0.5)
-
-      // Show bonus info if applicable
-      let yOffset = 35
-
-      // Planning bonus
-      if (hadPlanningBonus) {
-        this.add.text(width / 2, height / 2 + yOffset, `📋 Planning: +${planningBonuses.successBonus}% success`, {
-          fontSize: '12px',
-          color: '#a78bfa'
+        this.add.text(width / 2, height / 2 - 40, 'HEIST FAILED', {
+          fontSize: '28px',
+          color: '#ef4444',
+          fontFamily: 'Arial Black, Arial'
         }).setOrigin(0.5)
-        yOffset += 18
-      }
 
-      // Crew bonus
-      if (hadCrewBonus && !hadPlanningBonus && !hadRoleBonus) {
-        this.add.text(width / 2, height / 2 + yOffset, `👥 Crew bonus: +${modifiedSuccessRate - heist.baseSuccessRate - planningBonuses.successBonus - crewRoleBonus}%`, {
-          fontSize: '12px',
-          color: '#22d3ee'
+        this.add.text(width / 2, height / 2 + 10, result.message || 'The operation went wrong!', {
+          fontSize: '16px',
+          color: '#aaaaaa'
         }).setOrigin(0.5)
-        yOffset += 18
+
+        // Heat display
+        if (result.heatGained !== undefined) {
+          this.add.text(width / 2, height / 2 + 45, `Heat: +${result.heatGained}`, {
+            fontSize: '14px',
+            color: '#ef4444'
+          }).setOrigin(0.5)
+        }
+
+        // Sync status indicator
+        if (result.syncStatus === 'pending') {
+          this.add.text(width / 2, height / 2 + 70, `⏳ Pending sync`, {
+            fontSize: '12px',
+            color: '#f59e0b'
+          }).setOrigin(0.5)
+        }
       }
 
-      // Role bonus (driver, hacker, locksmith)
-      if (hadRoleBonus) {
-        const roleBonusNames = reqCheck.bonuses.filter(b => b.active).map(b => b.name).join(', ')
-        this.add.text(width / 2, height / 2 + yOffset, `🎭 ${roleBonusNames}: +${crewRoleBonus}%`, {
-          fontSize: '12px',
-          color: '#f59e0b'
-        }).setOrigin(0.5)
-        yOffset += 18
-      }
-
-      // Heat display with all reductions
-      let heatText = `Heat: +${heatGain}`
-      const totalReduction = heatReduction + planningHeatReduction
-      if (totalReduction > 0) {
-        const parts = []
-        if (heatReduction > 0) parts.push(`👁️ -${heatReduction}`)
-        if (planningHeatReduction > 0) parts.push(`📋 -${planningHeatReduction}`)
-        heatText = `Heat: +${heatGain} (${parts.join(', ')})`
-      }
-      this.add.text(width / 2, height / 2 + yOffset, heatText, {
-        fontSize: '14px',
-        color: totalReduction > 0 ? '#22d3ee' : '#ef4444'
-      }).setOrigin(0.5)
-    } else {
-      // Failed - double heat penalty (but still benefit from some reductions)
-      const failHeat = heist.heatGenerated * 2
-      let failHeatReduction = 0
-      let failPlanningReduction = 0
-      let actualFailHeat = failHeat
-
-      // Crew lookout still helps on failure
-      if (bonuses.heat > 0) {
-        failHeatReduction = Math.floor(actualFailHeat * (bonuses.heat / 100))
-        actualFailHeat = actualFailHeat - failHeatReduction
-      }
-
-      // Planning reduces heat even on failure (escape routes help)
-      if (planningBonuses.escapeBonus > 0) {
-        failPlanningReduction = Math.floor(actualFailHeat * (planningBonuses.escapeBonus / 200)) // Half escape bonus as heat reduction on fail
-        actualFailHeat = actualFailHeat - failPlanningReduction
-      }
-
-      player.heat = Math.min(100, (player.heat || 0) + actualFailHeat)
-      player.heat_level = player.heat
-
-      // Clear planning after heist (even on failure)
-      clearHeistPlanning(player, heist.id)
-
-      savePlayerData(player)
-      gameManager.player = player
-
-      // Generate news for failed heist
-      generatePlayerNews('heist_fail', {
-        district: player.current_district_id || 'Downtown',
-        target: heist.name
+      // Close button after results
+      this.time.delayedCall(3000, () => {
+        this.closeScene()
       })
+    } catch (error) {
+      // Error executing heist
+      executingText.destroy()
 
-      this.add.text(width / 2, height / 2 - 40, 'HEIST FAILED', {
+      this.add.text(width / 2, height / 2 - 40, 'HEIST ERROR', {
         fontSize: '28px',
         color: '#ef4444',
         fontFamily: 'Arial Black, Arial'
       }).setOrigin(0.5)
 
-      this.add.text(width / 2, height / 2 + 10, 'The operation went wrong!', {
+      this.add.text(width / 2, height / 2 + 10, error.message || 'Something went wrong', {
         fontSize: '16px',
         color: '#aaaaaa'
       }).setOrigin(0.5)
 
-      // Heat display with reductions
-      let failHeatText = `Heat: +${actualFailHeat}`
-      const totalFailReduction = failHeatReduction + failPlanningReduction
-      if (totalFailReduction > 0) {
-        const parts = []
-        if (failHeatReduction > 0) parts.push(`👁️ -${failHeatReduction}`)
-        if (failPlanningReduction > 0) parts.push(`🚗 -${failPlanningReduction}`)
-        failHeatText = `Heat: +${actualFailHeat} (${parts.join(', ')})`
-      }
-      this.add.text(width / 2, height / 2 + 45, failHeatText, {
-        fontSize: '14px',
-        color: totalFailReduction > 0 ? '#22d3ee' : '#ef4444'
-      }).setOrigin(0.5)
+      this.time.delayedCall(3000, () => {
+        this.closeScene()
+      })
     }
-
-    // Close button after results
-    this.time.delayedCall(3000, () => {
-      this.closeScene()
-    })
   }
 
   showHeistDetails(heist) {

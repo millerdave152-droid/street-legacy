@@ -78,6 +78,21 @@ class NotificationManagerClass {
         bgColor: 0xffd700,
         icon: '🎁',
         iconColor: '#000000'
+      },
+      sync: {
+        bgColor: 0x06b6d4, // Cyan for sync operations
+        icon: '⟳',
+        iconColor: '#ffffff'
+      },
+      sync_adjusted: {
+        bgColor: 0xf97316, // Orange for server-adjusted results
+        icon: '⚠️',
+        iconColor: '#ffffff'
+      },
+      sync_rejected: {
+        bgColor: 0xdc2626, // Red for rejected actions
+        icon: '✗',
+        iconColor: '#ffffff'
       }
     }
     return configs[type] || configs.info

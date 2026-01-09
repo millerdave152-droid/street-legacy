@@ -104,6 +104,7 @@ import streetBroadcastRoutes from './routes/streetBroadcast.routes.js';
 import lifeChaptersRoutes from './routes/lifeChapters.routes.js';
 import debtEconomyRoutes from './routes/debtEconomy.routes.js';
 import generationalContinuityRoutes from './routes/generationalContinuity.routes.js';
+import opsHeistRoutes from './routes/ops-heist.js';
 import { startDistrictStateCalculatorJob, getJobStatus } from './jobs/districtStateCalculator.job.js';
 import { updateTerritoryControl, payTerritoryIncome } from './routes/territory.js';
 import { triggerRandomEvent } from './routes/events.js';
@@ -256,6 +257,9 @@ app.use('/api/world-events', gameActionLimiter);
 // Premium Shop - 20 per minute (sensitive operations)
 app.use('/api/premium-shop', sensitiveLimiter);
 
+// Operations endpoints (server-authoritative actions) - 30 per minute
+app.use('/api/ops', gameActionLimiter);
+
 // Log rate limiter storage type on startup
 logger.info(`Rate limiter initialized with ${getStorageType()} store`);
 
@@ -325,6 +329,9 @@ app.use('/api/premium-shop', premiumShopRoutes);
 app.use('/api/districts', districtEcosystemRoutes);
 app.use('/api', reputationRoutes);  // Reputation routes (handles /players/:id/reputation, /factions, etc.)
 app.use('/api/world-memory', worldMemoryRoutes);  // World Memory routes (events, monuments, NPC memories)
+
+// Server-Authoritative Operations (anti-cheat)
+app.use('/api/ops/heist', opsHeistRoutes);  // Solo heist planning/execution
 
 // Narrative Systems (Phase 2-3)
 app.use('/api', witnessRoutes);  // Witness system (accounts, testimonies, investigations)

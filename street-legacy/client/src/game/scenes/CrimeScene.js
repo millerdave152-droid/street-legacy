@@ -1709,8 +1709,18 @@ export class CrimeScene extends Phaser.Scene {
 
     let result
     try {
-      // Execute the crime with bonus multiplier from mini-game
-      result = await gameManager.commitCrime(crime.id)
+      // Execute the crime with mini-game result for server validation
+      // Server applies success rate bonus based on mini-game score
+      result = await gameManager.commitCrime(crime.id, {
+        miniGameResult: {
+          success: miniGameResult.success,
+          score: miniGameResult.score || Math.floor(miniGameResult.bonusMultiplier * 50),
+          perfectRun: miniGameResult.perfectRun,
+          curveballsSurvived: miniGameResult.curveballsSurvived,
+          timeTaken: miniGameResult.timeTaken,
+          gameType: miniGameResult.gameType || crime.id
+        }
+      })
     } catch (error) {
       console.error('[CrimeScene] API failed after minigame, executing locally:', error)
       result = this.executeCrimeLocally(crime)

@@ -96,6 +96,32 @@ export class UIScene extends Phaser.Scene {
     this.encryptedIndicator = createEncryptedIndicator(this, width - 180, 12)
     this.encryptedIndicator.setDepth(DEPTH.UI_BAR_CONTENT)
 
+    // Sync status indicator (online/offline + pending count)
+    this.syncStatusContainer = this.add.container(width - 240, 12)
+    this.syncStatusContainer.setDepth(DEPTH.UI_BAR_CONTENT)
+
+    // Background pill
+    this.syncStatusBg = this.add.rectangle(0, 0, 50, 18, COLORS.bg.void, 0.8)
+    this.syncStatusBg.setStrokeStyle(1, COLORS.network.dim)
+    this.syncStatusContainer.add(this.syncStatusBg)
+
+    // Status icon (wifi/cloud)
+    this.syncStatusIcon = this.add.text(-15, 0, SYMBOLS.connected, {
+      ...getTerminalStyle('xs'),
+      color: COLORS.status.success
+    }).setOrigin(0.5)
+    this.syncStatusContainer.add(this.syncStatusIcon)
+
+    // Pending count (hidden by default)
+    this.syncPendingText = this.add.text(10, 0, '', {
+      ...getTerminalStyle('xs'),
+      color: COLORS.status.warning
+    }).setOrigin(0.5)
+    this.syncStatusContainer.add(this.syncPendingText)
+
+    // Update sync status
+    this.updateSyncStatus()
+
     // Time-of-day indicator
     const timeMod = getCurrentTimeModifier()
     const timeColors = {
@@ -514,6 +540,20 @@ export class UIScene extends Phaser.Scene {
       this.pulseMessageButton()
     })
 
+    // Listen for offline queue changes
+    gameManager.on('offlineQueueChanged', () => {
+      this.updateSyncStatus()
+    })
+
+    gameManager.on('actionReconciled', () => {
+      this.updateSyncStatus()
+    })
+
+    // Listen for sync notification events (reconciliation results)
+    gameManager.on('syncNotification', (event) => {
+      this.showSyncNotificationPopup(event)
+    })
+
     // Listen for new Network messages (THE NETWORK integration)
     networkMessageManager.addListener((event, data) => {
       if (event === 'new_message' && data) {
@@ -728,6 +768,155 @@ export class UIScene extends Phaser.Scene {
         this.levelIndicator.x = 12 + xpBarWidth + 8
       }
     }
+  }
+
+  /**
+   * Update sync status indicator
+   * Shows online/offline state and pending sync count
+   */
+  updateSyncStatus() {
+    if (!this.syncStatusContainer) return
+
+    const summary = gameManager.getOfflineQueueSummary()
+    const isOnline = summary.isOnline
+    const pending = summary.pending
+    const syncing = summary.syncInProgress
+
+    // Update icon based on status
+    if (syncing) {
+      // Syncing - show spinning/pulsing indicator
+      this.syncStatusIcon.setText(SYMBOLS.sync || '↻')
+      this.syncStatusIcon.setColor(COLORS.network.primary)
+
+      // Add pulse animation if not already running
+      if (!this._syncPulseAnim) {
+        this._syncPulseAnim = this.tweens.add({
+          targets: this.syncStatusIcon,
+          alpha: { from: 1, to: 0.3 },
+          duration: 500,
+          yoyo: true,
+          repeat: -1
+        })
+      }
+    } else if (!isOnline) {
+      // Offline
+      this.syncStatusIcon.setText(SYMBOLS.offline || '⚡')
+      this.syncStatusIcon.setColor(COLORS.status.danger)
+      this.syncStatusBg.setStrokeStyle(1, COLORS.status.danger)
+
+      // Stop pulse animation
+      if (this._syncPulseAnim) {
+        this._syncPulseAnim.stop()
+        this._syncPulseAnim = null
+        this.syncStatusIcon.setAlpha(1)
+      }
+    } else {
+      // Online
+      this.syncStatusIcon.setText(SYMBOLS.connected)
+      this.syncStatusIcon.setColor(COLORS.status.success)
+      this.syncStatusBg.setStrokeStyle(1, COLORS.network.dim)
+
+      // Stop pulse animation
+      if (this._syncPulseAnim) {
+        this._syncPulseAnim.stop()
+        this._syncPulseAnim = null
+        this.syncStatusIcon.setAlpha(1)
+      }
+    }
+
+    // Update pending count
+    if (pending > 0) {
+      this.syncPendingText.setText(`${pending}`)
+      this.syncPendingText.setVisible(true)
+      this.syncStatusBg.setSize(60, 18)
+    } else {
+      this.syncPendingText.setVisible(false)
+      this.syncStatusBg.setSize(50, 18)
+    }
+  }
+
+  /**
+   * Show a prominent popup for sync reconciliation events
+   * @param {Object} event - The sync notification event
+   */
+  showSyncNotificationPopup(event) {
+    const { type, title, message, adjustments } = event
+    const { width } = this.cameras.main
+
+    // Colors based on type
+    const colors = {
+      sync_adjusted: { bg: 0xf97316, border: 0xfb923c, icon: '⚠️' },
+      sync_rejected: { bg: 0xdc2626, border: 0xef4444, icon: '✗' },
+      sync_success: { bg: 0x22c55e, border: 0x4ade80, icon: '✓' }
+    }
+    const colorConfig = colors[type] || colors.sync_adjusted
+
+    // Create popup container
+    const popupY = 100
+    const popupWidth = Math.min(280, width - 40)
+    const popupHeight = 70
+
+    // Background with rounded corners effect
+    const popupBg = this.add.rectangle(width / 2, popupY, popupWidth, popupHeight, colorConfig.bg, 0.95)
+      .setStrokeStyle(2, colorConfig.border)
+      .setDepth(DEPTH.POPUP || 500)
+
+    // Icon
+    const icon = this.add.text(width / 2 - popupWidth / 2 + 25, popupY, colorConfig.icon, {
+      fontSize: '24px'
+    }).setOrigin(0.5).setDepth(DEPTH.POPUP + 1 || 501)
+
+    // Title
+    const titleText = this.add.text(width / 2 - popupWidth / 2 + 55, popupY - 12, title, {
+      ...getTerminalStyle('sm'),
+      color: '#ffffff',
+      fontStyle: 'bold'
+    }).setDepth(DEPTH.POPUP + 1 || 501)
+
+    // Message
+    const msgText = this.add.text(width / 2 - popupWidth / 2 + 55, popupY + 8, message, {
+      ...getTerminalStyle('xs'),
+      color: '#e5e5e5',
+      wordWrap: { width: popupWidth - 70 }
+    }).setDepth(DEPTH.POPUP + 1 || 501)
+
+    // Animate in
+    const elements = [popupBg, icon, titleText, msgText]
+    elements.forEach(el => {
+      el.setAlpha(0)
+      el.y -= 30
+    })
+
+    this.tweens.add({
+      targets: elements,
+      alpha: 1,
+      y: '+=30',
+      duration: 300,
+      ease: 'Back.easeOut'
+    })
+
+    // Auto dismiss after 4 seconds
+    this.time.delayedCall(4000, () => {
+      this.tweens.add({
+        targets: elements,
+        alpha: 0,
+        y: '-=20',
+        duration: 200,
+        ease: 'Power2',
+        onComplete: () => {
+          elements.forEach(el => el.destroy())
+        }
+      })
+    })
+
+    // Play sound based on type
+    try {
+      if (type === 'sync_rejected') {
+        audioManager.playSound?.('error')
+      } else if (type === 'sync_adjusted') {
+        audioManager.playSound?.('warning')
+      }
+    } catch (e) { /* ignore audio errors */ }
   }
 
   updateStatBar(key, current, max) {

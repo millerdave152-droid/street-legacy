@@ -6,6 +6,7 @@ import { playerService } from '../services/player.service'
 import { wsService, ConnectionState } from '../services/websocket.service'
 import { supabase } from '../services/supabase.js'
 import { authService } from '../services/auth.service.js'
+import offlineQueue, { ActionTypes, SyncStatus } from '../services/OfflineQueue.js'
 import {
   CRIMES, JOBS, DISTRICTS, ITEMS, PROPERTIES, HEISTS, TRADING_GOODS,
   getPlayerData, savePlayerData, checkLevelUp,
@@ -16,7 +17,10 @@ import {
   WANTED_LEVELS, POLICE_CONFIG, LAY_LOW_OPTIONS,
   getWantedLevel, checkPursuitTrigger,
   // Achievement System
-  checkLocalAchievements
+  checkLocalAchievements,
+  // Heist Planning (local fallback)
+  performPlanningActivity, getHeistPlanningStatus, clearHeistPlanning,
+  HEIST_PLANNING_CONFIG
 } from './data/GameData.js'
 
 // AI Player System
@@ -39,6 +43,10 @@ class GameManagerClass {
     this.activeEffects = []
     this.wsUnsubscribers = []
     this.useLocalData = USE_LOCAL_DATA_ONLY
+
+    // Offline queue integration
+    this.offlineQueueUnsubscribers = []
+    this.isOnline = navigator.onLine
   }
 
   setScene(scene) {
@@ -98,6 +106,9 @@ class GameManagerClass {
     // Initialize AI Player System
     this.initializeAISystem()
 
+    // Initialize Offline Queue system
+    this.initializeOfflineQueue()
+
     return this.gameState
   }
 
@@ -143,6 +154,100 @@ class GameManagerClass {
     } catch (error) {
       console.error('[GameManager] Failed to initialize AI system:', error)
     }
+  }
+
+  /**
+   * Initialize the Offline Queue system
+   * - Sets up listeners for queue state changes
+   * - Handles reconciliation events
+   * - Emits events for UI updates
+   */
+  initializeOfflineQueue() {
+    try {
+      // Track online/offline status
+      this.isOnline = offlineQueue.getIsOnline()
+
+      // Subscribe to queue state changes
+      const unsubQueue = offlineQueue.subscribe((state) => {
+        this.isOnline = state.isOnline
+        this.emit('offlineQueueChanged', state)
+
+        // Notify when back online with pending actions
+        if (state.isOnline && state.queueLength > 0 && !state.syncInProgress) {
+          this.addNotification('info', `Syncing ${state.queueLength} offline action(s)...`)
+        }
+
+        // Notify sync complete
+        if (state.isOnline && state.queueLength === 0 && this._wasSyncing) {
+          this.addNotification('success', 'All actions synced with server')
+        }
+        this._wasSyncing = state.syncInProgress
+      })
+      this.offlineQueueUnsubscribers.push(unsubQueue)
+
+      // Subscribe to reconciliation events
+      const unsubReconcile = offlineQueue.onReconciliation((event) => {
+        console.log('[GameManager] Reconciliation event:', event)
+
+        // Adjust local player state based on server result
+        if (event.adjustments) {
+          const { cash, xp, heat } = event.adjustments
+
+          if (cash !== 0) {
+            this.player.cash = (this.player.cash || 0) + cash
+          }
+          if (xp !== 0) {
+            this.player.xp = (this.player.xp || 0) + xp
+          }
+          if (heat !== 0) {
+            this.player.heat = Math.max(0, Math.min(100, (this.player.heat || 0) + heat))
+          }
+
+          this.savePlayer()
+          this.emit('playerUpdated', this.player)
+        }
+
+        // Show detailed reconciliation notification
+        this._showReconciliationNotification(event)
+
+        this.emit('actionReconciled', event)
+      })
+      this.offlineQueueUnsubscribers.push(unsubReconcile)
+
+      // Check for pending actions on startup
+      const summary = offlineQueue.getSummary()
+      if (summary.pending > 0) {
+        console.log(`[GameManager] ${summary.pending} pending offline actions`)
+        if (this.isOnline) {
+          offlineQueue.syncAll()
+        }
+      }
+
+      console.log('[GameManager] Offline queue system initialized')
+    } catch (error) {
+      console.error('[GameManager] Failed to initialize offline queue:', error)
+    }
+  }
+
+  /**
+   * Get offline queue summary for UI
+   */
+  getOfflineQueueSummary() {
+    return offlineQueue.getSummary()
+  }
+
+  /**
+   * Check if currently online
+   */
+  getIsOnline() {
+    return offlineQueue.getIsOnline()
+  }
+
+  /**
+   * Force sync of offline queue
+   */
+  async syncOfflineQueue() {
+    return offlineQueue.syncAll()
   }
 
   /**
@@ -883,6 +988,90 @@ class GameManagerClass {
     this.emit('notification', notification)
   }
 
+  /**
+   * Show detailed reconciliation notification for offline sync results
+   * @param {Object} event - Reconciliation event from OfflineQueue
+   */
+  _showReconciliationNotification(event) {
+    const { actionType, status, adjustments, serverResult, localResult, error } = event
+
+    // Map action type to readable name
+    const actionNames = {
+      crime: 'Crime',
+      heist: 'Heist',
+      property: 'Property',
+      property_buy: 'Property Purchase',
+      property_sell: 'Property Sale',
+      property_upgrade: 'Property Upgrade',
+      property_collect: 'Income Collection'
+    }
+    const actionName = actionNames[actionType] || 'Action'
+
+    // Handle different reconciliation statuses
+    if (status === 'rejected') {
+      // Action was rejected by server
+      const reason = error || 'Invalid action'
+      this.addNotification('error', `${actionName} rejected: ${reason}`)
+      this.emit('syncNotification', {
+        type: 'sync_rejected',
+        title: `${actionName} Rejected`,
+        message: reason,
+        actionType
+      })
+      return
+    }
+
+    if (status === 'adjusted' && adjustments) {
+      // Server result differed from local - show what changed
+      const changes = []
+
+      if (adjustments.cash !== 0) {
+        const cashStr = adjustments.cash > 0
+          ? `+$${adjustments.cash.toLocaleString()}`
+          : `-$${Math.abs(adjustments.cash).toLocaleString()}`
+        changes.push(cashStr)
+      }
+
+      if (adjustments.xp !== 0) {
+        const xpStr = adjustments.xp > 0
+          ? `+${adjustments.xp} XP`
+          : `${adjustments.xp} XP`
+        changes.push(xpStr)
+      }
+
+      if (adjustments.heat !== 0) {
+        const heatStr = adjustments.heat > 0
+          ? `+${adjustments.heat}% heat`
+          : `${adjustments.heat}% heat`
+        changes.push(heatStr)
+      }
+
+      if (changes.length > 0) {
+        const changeMsg = changes.join(', ')
+        this.addNotification('warning', `Sync adjusted ${actionName}: ${changeMsg}`)
+        this.emit('syncNotification', {
+          type: 'sync_adjusted',
+          title: `${actionName} Adjusted`,
+          message: `Server adjusted result: ${changeMsg}`,
+          actionType,
+          adjustments
+        })
+      }
+      return
+    }
+
+    // Synced successfully with no adjustment
+    if (status === 'synced') {
+      // Only show notification if result was different enough to mention
+      const serverCash = serverResult?.cashEarned || serverResult?.cash || 0
+      const localCash = localResult?.cashEarned || localResult?.cash || 0
+
+      if (Math.abs(serverCash - localCash) > 0) {
+        this.addNotification('success', `${actionName} synced with server`)
+      }
+    }
+  }
+
   // Cooldown management
   setCooldown(action, durationMs) {
     this.cooldowns.set(action, Date.now() + durationMs)
@@ -903,92 +1092,198 @@ class GameManagerClass {
   // PLAYER ACTIONS
   // ==========================================================================
 
-  async commitCrime(crimeTypeId) {
+  /**
+   * Commit a crime with server-first approach and offline fallback
+   * @param {string|number} crimeTypeId - Crime ID to commit
+   * @param {Object} options - Additional options
+   * @param {Object} options.miniGameResult - Mini-game result for bonus validation
+   */
+  async commitCrime(crimeTypeId, options = {}) {
     if (this.isOnCooldown('crime')) {
       const remaining = Math.ceil(this.getCooldownRemaining('crime') / 1000)
       throw new Error(`Wait ${remaining}s before committing another crime`)
     }
 
-    // Use local data if enabled
+    const crime = CRIMES.find(c => c.id === crimeTypeId)
+    if (!crime) {
+      throw new Error('Crime not found')
+    }
+
+    // Use local data only if explicitly set
     if (this.useLocalData) {
-      const crime = CRIMES.find(c => c.id === crimeTypeId)
-      if (!crime) {
-        throw new Error('Crime not found')
-      }
-
-      const result = executeCrime(this.player, crime)
-      this.setCooldown('crime', 30000) // 30 second cooldown
-
-      // Update player reference
-      if (result.player) {
-        this.player = result.player
-        this.savePlayer()
-        this.emit('playerUpdated', this.player)
-      }
-
-      if (result.success) {
-        this.addNotification('success', `Crime successful! Earned $${result.cash_earned?.toLocaleString() || 0}`)
-        if (result.leveled_up) {
-          this.addNotification('success', `Level Up! Now level ${result.new_level}`)
-        }
-      } else {
-        this.addNotification('danger', result.message || 'Crime failed!')
-        if (result.caught) {
-          this.addNotification('danger', 'You were caught and sent to jail!')
-        }
-      }
-
-      this.emit('crimeCompleted', result)
-      return result
+      return this._executeLocalCrime(crime, options)
     }
 
-    try {
-      const apiResult = await playerService.commitCrime(crimeTypeId)
+    // Server-first approach: try server, fallback to offline queue
+    const isOnline = offlineQueue.getIsOnline()
 
-      // Normalize the API response (server returns crimeSuccess, cashGained, etc.)
-      const result = {
-        success: apiResult.crimeSuccess ?? apiResult.success ?? false,
-        cash_earned: apiResult.cashGained ?? apiResult.cash_earned ?? 0,
-        xp_earned: apiResult.xpGained ?? apiResult.xp_earned ?? 0,
-        leveled_up: apiResult.leveledUp ?? apiResult.leveled_up ?? false,
-        new_level: apiResult.newLevel ?? apiResult.new_level ?? null,
-        jailed: apiResult.caught ?? apiResult.jailed ?? false,
-        message: apiResult.message,
-        player: apiResult.player,
-        heatGained: apiResult.heatGained ?? 0
-      }
+    if (isOnline) {
+      try {
+        const apiResult = await playerService.commitCrime(crimeTypeId, {
+          miniGameResult: options.miniGameResult
+        })
 
-      this.setCooldown('crime', 30000) // 30 second cooldown
+        // Normalize and process server response
+        const result = this._normalizeServerCrimeResult(apiResult)
+        this._processCrimeResult(result, false) // false = not from offline queue
 
-      // Update local player state with server response
-      if (result.player) {
-        if (result.player.cash !== undefined) this.player.cash = result.player.cash
-        if (result.player.xp !== undefined) this.player.xp = result.player.xp
-        if (result.player.level !== undefined) this.player.level = result.player.level
-        if (result.player.energy !== undefined) this.player.energy = result.player.energy
-        if (result.player.stamina !== undefined) this.player.stamina = result.player.stamina
-        if (result.player.heat !== undefined) this.player.heat = result.player.heat
-        this.emit('playerUpdated', this.player)
-      }
-
-      if (result.success) {
-        this.addNotification('success', `Crime successful! Earned $${result.cash_earned?.toLocaleString() || 0}`)
-        if (result.leveled_up) {
-          this.addNotification('success', `Level Up! Now level ${result.new_level}`)
+        return result
+      } catch (error) {
+        // Check if it's a network error (offline)
+        if (this._isNetworkError(error)) {
+          console.log('[GameManager] Network error, falling back to offline mode')
+          return this._executeOfflineCrime(crime, options)
         }
-      } else {
-        this.addNotification('danger', result.message || 'Crime failed!')
-        if (result.jailed) {
-          this.addNotification('danger', 'You were caught and sent to jail!')
-        }
-      }
 
-      this.emit('crimeCompleted', result)
-      return result
-    } catch (error) {
-      this.addNotification('danger', error.message)
-      throw error
+        // Server validation error - don't fallback
+        this.addNotification('danger', error.message)
+        throw error
+      }
+    } else {
+      // Already offline - execute locally and queue
+      return this._executeOfflineCrime(crime, options)
     }
+  }
+
+  /**
+   * Execute crime locally (for USE_LOCAL_DATA_ONLY mode)
+   */
+  _executeLocalCrime(crime, options = {}) {
+    const result = executeCrime(this.player, crime)
+    this.setCooldown('crime', 30000)
+
+    if (result.player) {
+      this.player = result.player
+      this.savePlayer()
+      this.emit('playerUpdated', this.player)
+    }
+
+    this._showCrimeNotifications(result)
+    this.emit('crimeCompleted', result)
+    return result
+  }
+
+  /**
+   * Execute crime offline and queue for sync
+   */
+  _executeOfflineCrime(crime, options = {}) {
+    // Execute locally
+    const localResult = executeCrime(this.player, crime)
+    this.setCooldown('crime', 30000)
+
+    // Update local player state
+    if (localResult.player) {
+      this.player = localResult.player
+      this.savePlayer()
+      this.emit('playerUpdated', this.player)
+    }
+
+    // Queue for server sync
+    const actionId = offlineQueue.enqueue({
+      type: ActionTypes.CRIME,
+      data: {
+        crimeId: crime.id,
+        miniGameResult: options.miniGameResult
+      },
+      localResult: {
+        success: localResult.success,
+        cashGained: localResult.cash_earned || 0,
+        xpGained: localResult.xp_earned || 0,
+        heatGained: localResult.heat_gained || 5
+      }
+    })
+
+    // Mark result as pending sync
+    localResult.syncStatus = SyncStatus.PENDING
+    localResult.offlineActionId = actionId
+
+    this._showCrimeNotifications(localResult, true) // true = offline
+    this.emit('crimeCompleted', localResult)
+    return localResult
+  }
+
+  /**
+   * Normalize server API response to common format
+   */
+  _normalizeServerCrimeResult(apiResult) {
+    return {
+      success: apiResult.crimeSuccess ?? apiResult.success ?? false,
+      cash_earned: apiResult.cashGained ?? apiResult.cash_earned ?? 0,
+      xp_earned: apiResult.xpGained ?? apiResult.xp_earned ?? 0,
+      leveled_up: apiResult.leveledUp ?? apiResult.leveled_up ?? false,
+      new_level: apiResult.newLevel ?? apiResult.new_level ?? null,
+      jailed: apiResult.caught ?? apiResult.jailed ?? false,
+      message: apiResult.message,
+      player: apiResult.player,
+      heatGained: apiResult.heatGained ?? 0,
+      miniGameValidation: apiResult.miniGameValidation,
+      offlineReconciliation: apiResult.offlineReconciliation,
+      syncStatus: SyncStatus.SYNCED
+    }
+  }
+
+  /**
+   * Process crime result - update player state and cooldown
+   */
+  _processCrimeResult(result, fromOfflineQueue = false) {
+    this.setCooldown('crime', 30000)
+
+    // Update local player state with server response
+    if (result.player) {
+      if (result.player.cash !== undefined) this.player.cash = result.player.cash
+      if (result.player.xp !== undefined) this.player.xp = result.player.xp
+      if (result.player.level !== undefined) this.player.level = result.player.level
+      if (result.player.energy !== undefined) this.player.energy = result.player.energy
+      if (result.player.stamina !== undefined) this.player.stamina = result.player.stamina
+      if (result.player.heat !== undefined) this.player.heat = result.player.heat
+      this.savePlayer()
+      this.emit('playerUpdated', this.player)
+    }
+
+    this._showCrimeNotifications(result, false)
+    this.emit('crimeCompleted', result)
+  }
+
+  /**
+   * Show notifications for crime result
+   */
+  _showCrimeNotifications(result, isOffline = false) {
+    const offlineTag = isOffline ? ' [Offline]' : ''
+
+    if (result.success) {
+      this.addNotification('success', `Crime successful! Earned $${result.cash_earned?.toLocaleString() || 0}${offlineTag}`)
+      if (result.leveled_up) {
+        this.addNotification('success', `Level Up! Now level ${result.new_level}`)
+      }
+      // Show mini-game bonus if applied
+      if (result.miniGameValidation?.accepted && result.miniGameValidation.bonusApplied > 0) {
+        this.addNotification('info', `Mini-game bonus: +${result.miniGameValidation.bonusApplied}% success rate`)
+      }
+    } else {
+      this.addNotification('danger', result.message || 'Crime failed!')
+      if (result.jailed || result.caught) {
+        this.addNotification('danger', 'You were caught and sent to jail!')
+      }
+    }
+
+    // Offline indicator
+    if (isOffline) {
+      this.addNotification('info', 'Action queued - will sync when online')
+    }
+  }
+
+  /**
+   * Check if error is a network error
+   */
+  _isNetworkError(error) {
+    const message = error.message?.toLowerCase() || ''
+    return (
+      message.includes('failed to fetch') ||
+      message.includes('network') ||
+      message.includes('offline') ||
+      message.includes('econnrefused') ||
+      message.includes('timeout')
+    )
   }
 
   async workJob(jobTypeId) {
@@ -2304,6 +2599,279 @@ class GameManagerClass {
       this.addNotification('danger', error.message)
       throw error
     }
+  }
+
+  // ==========================================================================
+  // SOLO HEIST PLANNING (Server-Authoritative)
+  // ==========================================================================
+
+  /**
+   * Get heist planning configuration
+   */
+  async getHeistPlanningConfig() {
+    try {
+      const result = await playerService.getHeistConfig()
+      return result.data || result
+    } catch (error) {
+      // Fallback to local config
+      console.log('[GameManager] Using local heist planning config')
+      return HEIST_PLANNING_CONFIG
+    }
+  }
+
+  /**
+   * Get current planning session for a heist
+   */
+  async getHeistPlanning(heistId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !this.useLocalData) {
+      try {
+        const result = await playerService.getHeistPlanning(heistId)
+        return result.data || result
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          throw error
+        }
+        console.log('[GameManager] Network error, using local planning state')
+      }
+    }
+
+    // Fallback to local planning state
+    const heist = HEISTS.find(h => h.id === heistId)
+    const status = getHeistPlanningStatus(this.player, heistId, heist?.difficulty || 1)
+    return {
+      hasPlanning: !!status.planning?.activities,
+      planning: status.planning,
+      bonuses: status.bonuses
+    }
+  }
+
+  /**
+   * Start a new planning session for a solo heist
+   */
+  async startHeistPlanning(heistId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !this.useLocalData) {
+      try {
+        const result = await playerService.startHeistPlanning(heistId)
+        this.addNotification('success', 'Planning session started')
+        this.emit('heistPlanningStarted', result.data || result)
+        return result.data || result
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          this.addNotification('danger', error.message)
+          throw error
+        }
+        console.log('[GameManager] Network error, starting local planning')
+      }
+    }
+
+    // Local fallback - initialize planning state
+    if (!this.player.heist_planning) {
+      this.player.heist_planning = {}
+    }
+    if (!this.player.heist_planning[heistId]) {
+      this.player.heist_planning[heistId] = {
+        activities: {},
+        totalBonuses: { successBonus: 0, heatReduction: 0, escapeBonus: 0 },
+        startedAt: Date.now()
+      }
+    }
+    this.savePlayer()
+    this.addNotification('success', 'Planning session started [Offline]')
+    return { hasPlanning: true, planning: this.player.heist_planning[heistId] }
+  }
+
+  /**
+   * Perform a planning activity (server-first with offline fallback)
+   */
+  async performHeistActivity(heistId, activityId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !this.useLocalData) {
+      try {
+        const result = await playerService.performHeistActivity(heistId, activityId)
+        const data = result.data || result
+
+        // Update local player state with energy/cash spent
+        if (data.energySpent) {
+          this.player.energy = Math.max(0, (this.player.energy || 100) - data.energySpent)
+          this.player.stamina = this.player.energy
+        }
+        if (data.cashSpent) {
+          this.player.cash = Math.max(0, (this.player.cash || 0) - data.cashSpent)
+        }
+        this.savePlayer()
+        this.emit('playerUpdated', this.player)
+
+        this.addNotification('success', data.message || 'Activity completed!')
+        this.emit('heistActivityCompleted', data)
+        return data
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          this.addNotification('danger', error.message)
+          throw error
+        }
+        console.log('[GameManager] Network error, performing activity locally')
+      }
+    }
+
+    // Local fallback
+    const result = performPlanningActivity(this.player, heistId, activityId)
+    if (result.success) {
+      this.savePlayer()
+      this.emit('playerUpdated', this.player)
+      this.addNotification('success', `${result.message} [Offline]`)
+      this.emit('heistActivityCompleted', result)
+    } else {
+      this.addNotification('danger', result.message)
+    }
+    return result
+  }
+
+  /**
+   * Execute a solo heist (server-first with offline fallback)
+   */
+  async executeSoloHeist(heistId) {
+    const heist = HEISTS.find(h => h.id === heistId)
+    if (!heist) {
+      throw new Error('Heist not found')
+    }
+
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !this.useLocalData) {
+      try {
+        const result = await playerService.executeHeist(heistId)
+        const data = result.data || result
+
+        // Update local player state
+        if (data.player) {
+          if (data.player.cash !== undefined) this.player.cash = data.player.cash
+          if (data.player.xp !== undefined) this.player.xp = data.player.xp
+          if (data.player.heat !== undefined) this.player.heat = data.player.heat
+          if (data.player.level !== undefined) this.player.level = data.player.level
+          this.savePlayer()
+          this.emit('playerUpdated', this.player)
+        }
+
+        if (data.heistSuccess) {
+          this.addNotification('success', `Heist successful! Earned $${data.payout?.toLocaleString() || 0}`)
+        } else {
+          this.addNotification('danger', data.message || 'Heist failed!')
+        }
+
+        this.emit('soloHeistExecuted', data)
+        return {
+          success: data.heistSuccess,
+          payout: data.payout || 0,
+          xpGained: data.xpGained || 0,
+          heatGained: data.heatGained || 0,
+          message: data.message,
+          planningBonusApplied: data.planningBonusApplied,
+          syncStatus: SyncStatus.SYNCED
+        }
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          this.addNotification('danger', error.message)
+          throw error
+        }
+        console.log('[GameManager] Network error, executing heist locally')
+      }
+    }
+
+    // Offline execution
+    return this._executeOfflineHeist(heist)
+  }
+
+  /**
+   * Execute heist offline and queue for sync
+   */
+  _executeOfflineHeist(heist) {
+    const planningStatus = getHeistPlanningStatus(this.player, heist.id, heist.difficulty || 1)
+    const bonuses = planningStatus.bonuses
+
+    // Calculate success with planning bonuses
+    let successRate = heist.baseSuccessRate + (bonuses.successBonus || 0)
+    successRate = Math.min(95, successRate)
+
+    const roll = Math.random() * 100
+    const success = roll < successRate
+
+    let payout = 0
+    let heatGained = heist.heatGenerated || 10
+
+    // Apply heat reduction from planning
+    if (bonuses.heatReduction > 0) {
+      heatGained = Math.floor(heatGained * (1 - bonuses.heatReduction / 100))
+    }
+
+    if (success) {
+      payout = Math.floor(Math.random() * (heist.maxPayout - heist.minPayout) + heist.minPayout)
+      this.player.cash = (this.player.cash || 0) + payout
+      this.player.xp = (this.player.xp || 0) + Math.floor(payout / 10)
+      this.player.heists_completed = (this.player.heists_completed || 0) + 1
+    }
+
+    this.player.heat = Math.min(100, (this.player.heat || 0) + heatGained)
+    this.player.heat_level = this.player.heat
+
+    // Clear planning after heist
+    clearHeistPlanning(this.player, heist.id)
+
+    this.savePlayer()
+    this.emit('playerUpdated', this.player)
+
+    const localResult = {
+      success,
+      payout,
+      xpGained: success ? Math.floor(payout / 10) : 0,
+      heatGained
+    }
+
+    // Queue for sync
+    const actionId = offlineQueue.enqueue({
+      type: ActionTypes.HEIST,
+      data: { heistId: heist.id },
+      localResult
+    })
+
+    if (success) {
+      this.addNotification('success', `Heist successful! Earned $${payout.toLocaleString()} [Offline]`)
+    } else {
+      this.addNotification('danger', 'Heist failed! [Offline]')
+    }
+    this.addNotification('info', 'Action queued - will sync when online')
+
+    this.emit('soloHeistExecuted', { ...localResult, syncStatus: SyncStatus.PENDING })
+    return { ...localResult, syncStatus: SyncStatus.PENDING, offlineActionId: actionId }
+  }
+
+  /**
+   * Cancel a solo heist planning session
+   */
+  async cancelHeistPlanning(heistId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !this.useLocalData) {
+      try {
+        const result = await playerService.cancelHeistPlanning(heistId)
+        this.addNotification('info', 'Planning cancelled')
+        return result.data || result
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          throw error
+        }
+      }
+    }
+
+    // Local fallback
+    clearHeistPlanning(this.player, heistId)
+    this.savePlayer()
+    this.addNotification('info', 'Planning cancelled')
+    return { success: true }
   }
 
   // ==========================================================================

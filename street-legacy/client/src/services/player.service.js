@@ -113,8 +113,27 @@ class PlayerService {
     ]
   }
 
-  async commitCrime(crimeTypeId) {
-    return apiRequest('/game/crime', 'POST', { crimeId: crimeTypeId })
+  /**
+   * Commit a crime
+   * @param {string|number} crimeTypeId - Crime ID to commit
+   * @param {Object} options - Additional options
+   * @param {Object} options.miniGameResult - Mini-game result for bonus validation
+   * @param {Object} options.offlineSubmission - Offline submission data for sync
+   */
+  async commitCrime(crimeTypeId, options = {}) {
+    const body = { crimeId: crimeTypeId }
+
+    // Add mini-game result if provided
+    if (options.miniGameResult) {
+      body.miniGameResult = options.miniGameResult
+    }
+
+    // Add offline submission if provided
+    if (options.offlineSubmission) {
+      body.offlineSubmission = options.offlineSubmission
+    }
+
+    return apiRequest('/game/crime', 'POST', body)
   }
 
   // ==========================================================================
@@ -162,6 +181,66 @@ class PlayerService {
   async getJobStats() {
     const result = await apiRequest('/jobs/stats')
     return result.data || result
+  }
+
+  // ==========================================================================
+  // HEISTS (Server-Authoritative)
+  // ==========================================================================
+
+  /**
+   * Get heist planning configuration from server
+   */
+  async getHeistConfig() {
+    return apiRequest('/ops/heist/config')
+  }
+
+  /**
+   * Get current planning session for a heist
+   * @param {string} heistId - Heist ID
+   */
+  async getHeistPlanning(heistId) {
+    return apiRequest(`/ops/heist/planning/${heistId}`)
+  }
+
+  /**
+   * Start a new planning session for a heist
+   * @param {string} heistId - Heist ID to plan
+   */
+  async startHeistPlanning(heistId) {
+    return apiRequest('/ops/heist/start-planning', 'POST', { heistId })
+  }
+
+  /**
+   * Perform a planning activity (costs energy/cash, grants bonuses)
+   * @param {string} heistId - Heist ID
+   * @param {string} activityId - Activity ID to perform
+   */
+  async performHeistActivity(heistId, activityId) {
+    return apiRequest('/ops/heist/activity', 'POST', { heistId, activityId })
+  }
+
+  /**
+   * Execute a heist (server-side roll with planning bonuses)
+   * @param {string} heistId - Heist ID to execute
+   * @param {Object} options - Additional options
+   * @param {Object} options.offlineSubmission - Offline submission data for sync
+   */
+  async executeHeist(heistId, options = {}) {
+    const body = { heistId }
+
+    if (options.offlineSubmission) {
+      body.offlineSubmission = options.offlineSubmission
+    }
+
+    return apiRequest('/ops/heist/execute', 'POST', body)
+  }
+
+  /**
+   * Cancel a planning session
+   * @param {string} heistId - Heist ID to cancel planning for
+   */
+  async cancelHeistPlanning(heistId) {
+    return apiRequest(`/ops/heist/cancel/${heistId}`, 'POST')
   }
 
   // ==========================================================================
@@ -213,20 +292,73 @@ class PlayerService {
     return result.properties || result || []
   }
 
-  async purchaseProperty(propertyId) {
-    return apiRequest('/game/property/buy', 'POST', { propertyId })
+  /**
+   * Purchase a property
+   * @param {string} propertyId - Property ID
+   * @param {Object} options - Additional options
+   * @param {Object} options.offlineSubmission - Offline submission data
+   */
+  async purchaseProperty(propertyId, options = {}) {
+    const body = { propertyId }
+    if (options.offlineSubmission) {
+      body.offlineSubmission = options.offlineSubmission
+    }
+    return apiRequest('/game/property/buy', 'POST', body)
   }
 
-  async collectPropertyIncome(propertyId) {
-    return apiRequest('/game/property/collect', 'POST', { propertyId })
+  /**
+   * Sell a property
+   * @param {string} propertyId - Property ID
+   * @param {Object} options - Additional options
+   * @param {Object} options.offlineSubmission - Offline submission data
+   */
+  async sellProperty(propertyId, options = {}) {
+    const body = { propertyId }
+    if (options.offlineSubmission) {
+      body.offlineSubmission = options.offlineSubmission
+    }
+    return apiRequest('/game/property/sell', 'POST', body)
   }
 
-  async collectAllPropertyIncome() {
-    return apiRequest('/game/property/collect-all', 'POST')
+  /**
+   * Collect income from a property
+   * @param {string} propertyId - Property ID
+   * @param {Object} options - Additional options
+   * @param {Object} options.offlineSubmission - Offline submission data
+   */
+  async collectPropertyIncome(propertyId, options = {}) {
+    const body = { propertyId }
+    if (options.offlineSubmission) {
+      body.offlineSubmission = options.offlineSubmission
+    }
+    return apiRequest('/game/property/collect', 'POST', body)
   }
 
-  async upgradeProperty(propertyId) {
-    return apiRequest('/game/property/upgrade', 'POST', { propertyId })
+  /**
+   * Collect all property income
+   * @param {Object} options - Additional options
+   * @param {Object} options.offlineSubmission - Offline submission data
+   */
+  async collectAllPropertyIncome(options = {}) {
+    const body = {}
+    if (options.offlineSubmission) {
+      body.offlineSubmission = options.offlineSubmission
+    }
+    return apiRequest('/game/property/collect-all', 'POST', body)
+  }
+
+  /**
+   * Upgrade a property
+   * @param {string} propertyId - Property ID
+   * @param {Object} options - Additional options
+   * @param {Object} options.offlineSubmission - Offline submission data
+   */
+  async upgradeProperty(propertyId, options = {}) {
+    const body = { propertyId }
+    if (options.offlineSubmission) {
+      body.offlineSubmission = options.offlineSubmission
+    }
+    return apiRequest('/game/property/upgrade', 'POST', body)
   }
 
   async getTotalPropertyIncome() {

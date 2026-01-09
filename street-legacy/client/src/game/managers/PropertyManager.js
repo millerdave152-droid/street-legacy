@@ -2,7 +2,7 @@
  * PropertyManager.js - Business logic for property system
  *
  * Handles all property operations: purchase, upgrade, sell, income collection, upkeep.
- * Works with both API and local storage modes.
+ * Works with server-first approach with offline queue fallback.
  */
 
 import {
@@ -21,6 +21,8 @@ import {
 } from '../data/PropertyData'
 import { getPlayerData, savePlayerData } from '../data/GameData'
 import { gameManager } from '../GameManager'
+import { playerService } from '../../services/player.service'
+import offlineQueue, { ActionTypes, SyncStatus } from '../../services/OfflineQueue'
 
 // ============================================================================
 // PROPERTY MANAGER CLASS
@@ -398,15 +400,15 @@ class PropertyManagerClass {
   }
 
   // ==========================================================================
-  // HIGH-LEVEL CONVENIENCE METHODS
+  // HIGH-LEVEL CONVENIENCE METHODS (Local only - use server methods below)
   // ==========================================================================
 
   /**
-   * Purchase property and save (convenience method)
+   * Purchase property and save locally (convenience method)
    * @param {string} propertyId - Property ID
    * @returns {Object} Result with success status
    */
-  buyAndSave(propertyId) {
+  buyAndSaveLocal(propertyId) {
     const player = this.getPlayer()
     const result = this.purchaseProperty(propertyId, player)
 
@@ -418,11 +420,11 @@ class PropertyManagerClass {
   }
 
   /**
-   * Upgrade property and save (convenience method)
+   * Upgrade property and save locally (convenience method)
    * @param {string} propertyId - Property ID
    * @returns {Object} Result with success status
    */
-  upgradeAndSave(propertyId) {
+  upgradeAndSaveLocal(propertyId) {
     const player = this.getPlayer()
     const result = this.upgradeProperty(propertyId, player)
 
@@ -434,11 +436,11 @@ class PropertyManagerClass {
   }
 
   /**
-   * Sell property and save (convenience method)
+   * Sell property and save locally (convenience method)
    * @param {string} propertyId - Property ID
    * @returns {Object} Result with success status
    */
-  sellAndSave(propertyId) {
+  sellAndSaveLocal(propertyId) {
     const player = this.getPlayer()
     const result = this.sellProperty(propertyId, player)
 
@@ -450,11 +452,11 @@ class PropertyManagerClass {
   }
 
   /**
-   * Collect income and save (convenience method)
+   * Collect income and save locally (convenience method)
    * @param {string} propertyId - Property ID
    * @returns {Object} Result with success status
    */
-  collectAndSave(propertyId) {
+  collectAndSaveLocal(propertyId) {
     const player = this.getPlayer()
     const result = this.collectIncome(propertyId, player)
 
@@ -466,15 +468,368 @@ class PropertyManagerClass {
   }
 
   /**
-   * Collect all income and save (convenience method)
+   * Collect all income and save locally (convenience method)
    * @returns {Object} Result with success status
    */
-  collectAllAndSave() {
+  collectAllAndSaveLocal() {
     const player = this.getPlayer()
     const result = this.collectAllIncome(player)
 
     if (result.success && result.totalAmount > 0) {
       this.savePlayer(player)
+    }
+
+    return result
+  }
+
+  // ==========================================================================
+  // SERVER-FIRST METHODS (with offline fallback)
+  // ==========================================================================
+
+  /**
+   * Check if error is a network error
+   */
+  _isNetworkError(error) {
+    const message = error.message?.toLowerCase() || ''
+    return (
+      message.includes('failed to fetch') ||
+      message.includes('network') ||
+      message.includes('offline') ||
+      message.includes('econnrefused') ||
+      message.includes('timeout')
+    )
+  }
+
+  /**
+   * Purchase property (server-first with offline fallback)
+   * @param {string} propertyId - Property ID
+   * @returns {Promise<Object>} Result with success status
+   */
+  async buyAndSave(propertyId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !gameManager.useLocalData) {
+      try {
+        const result = await playerService.purchaseProperty(propertyId)
+        const data = result.data || result
+
+        // Update local player state
+        if (data.player) {
+          if (data.player.cash !== undefined) gameManager.player.cash = data.player.cash
+          if (data.player.properties) gameManager.player.properties = data.player.properties
+          this.savePlayer(gameManager.player)
+          gameManager.emit('playerUpdated', gameManager.player)
+        }
+
+        return {
+          success: true,
+          property: data.property,
+          syncStatus: SyncStatus.SYNCED
+        }
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          return { success: false, error: error.message }
+        }
+        console.log('[PropertyManager] Network error, executing locally')
+      }
+    }
+
+    // Offline fallback
+    return this._buyOffline(propertyId)
+  }
+
+  /**
+   * Execute purchase offline and queue for sync
+   */
+  _buyOffline(propertyId) {
+    const player = this.getPlayer()
+    const propertyDef = getPropertyById(propertyId)
+    const result = this.purchaseProperty(propertyId, player)
+
+    if (result.success) {
+      this.savePlayer(player)
+      gameManager.player = player
+      gameManager.emit('playerUpdated', player)
+
+      // Queue for sync
+      offlineQueue.enqueue({
+        type: ActionTypes.PROPERTY,
+        data: { operation: 'buy', propertyId },
+        localResult: {
+          cashSpent: propertyDef.price,
+          propertyId
+        }
+      })
+
+      result.syncStatus = SyncStatus.PENDING
+    }
+
+    return result
+  }
+
+  /**
+   * Upgrade property (server-first with offline fallback)
+   * @param {string} propertyId - Property ID
+   * @returns {Promise<Object>} Result with success status
+   */
+  async upgradeAndSave(propertyId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !gameManager.useLocalData) {
+      try {
+        const result = await playerService.upgradeProperty(propertyId)
+        const data = result.data || result
+
+        // Update local player state
+        if (data.player) {
+          if (data.player.cash !== undefined) gameManager.player.cash = data.player.cash
+          if (data.player.properties) gameManager.player.properties = data.player.properties
+          this.savePlayer(gameManager.player)
+          gameManager.emit('playerUpdated', gameManager.player)
+        }
+
+        return {
+          success: true,
+          property: data.property,
+          cost: data.cost,
+          syncStatus: SyncStatus.SYNCED
+        }
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          return { success: false, error: error.message }
+        }
+        console.log('[PropertyManager] Network error, executing locally')
+      }
+    }
+
+    // Offline fallback
+    return this._upgradeOffline(propertyId)
+  }
+
+  /**
+   * Execute upgrade offline and queue for sync
+   */
+  _upgradeOffline(propertyId) {
+    const player = this.getPlayer()
+    const ownedProperty = (player?.properties || []).find(p => p.id === propertyId)
+    const upgradeCost = ownedProperty ? calculateUpgradeCost(ownedProperty) : 0
+
+    const result = this.upgradeProperty(propertyId, player)
+
+    if (result.success) {
+      this.savePlayer(player)
+      gameManager.player = player
+      gameManager.emit('playerUpdated', player)
+
+      // Queue for sync
+      offlineQueue.enqueue({
+        type: ActionTypes.PROPERTY,
+        data: { operation: 'upgrade', propertyId },
+        localResult: {
+          cashSpent: upgradeCost,
+          newLevel: result.property?.level
+        }
+      })
+
+      result.syncStatus = SyncStatus.PENDING
+    }
+
+    return result
+  }
+
+  /**
+   * Sell property (server-first with offline fallback)
+   * @param {string} propertyId - Property ID
+   * @returns {Promise<Object>} Result with success status
+   */
+  async sellAndSave(propertyId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !gameManager.useLocalData) {
+      try {
+        const result = await playerService.sellProperty(propertyId)
+        const data = result.data || result
+
+        // Update local player state
+        if (data.player) {
+          if (data.player.cash !== undefined) gameManager.player.cash = data.player.cash
+          if (data.player.properties) gameManager.player.properties = data.player.properties
+          this.savePlayer(gameManager.player)
+          gameManager.emit('playerUpdated', gameManager.player)
+        }
+
+        return {
+          success: true,
+          amount: data.amount,
+          syncStatus: SyncStatus.SYNCED
+        }
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          return { success: false, error: error.message }
+        }
+        console.log('[PropertyManager] Network error, executing locally')
+      }
+    }
+
+    // Offline fallback
+    return this._sellOffline(propertyId)
+  }
+
+  /**
+   * Execute sell offline and queue for sync
+   */
+  _sellOffline(propertyId) {
+    const player = this.getPlayer()
+    const ownedProperty = (player?.properties || []).find(p => p.id === propertyId)
+    const sellValue = ownedProperty ? calculateSellValue(ownedProperty) : 0
+
+    const result = this.sellProperty(propertyId, player)
+
+    if (result.success) {
+      this.savePlayer(player)
+      gameManager.player = player
+      gameManager.emit('playerUpdated', player)
+
+      // Queue for sync
+      offlineQueue.enqueue({
+        type: ActionTypes.PROPERTY,
+        data: { operation: 'sell', propertyId },
+        localResult: {
+          cashGained: sellValue,
+          propertyId
+        }
+      })
+
+      result.syncStatus = SyncStatus.PENDING
+    }
+
+    return result
+  }
+
+  /**
+   * Collect income (server-first with offline fallback)
+   * @param {string} propertyId - Property ID
+   * @returns {Promise<Object>} Result with success status
+   */
+  async collectAndSave(propertyId) {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !gameManager.useLocalData) {
+      try {
+        const result = await playerService.collectPropertyIncome(propertyId)
+        const data = result.data || result
+
+        // Update local player state
+        if (data.player) {
+          if (data.player.cash !== undefined) gameManager.player.cash = data.player.cash
+          if (data.player.properties) gameManager.player.properties = data.player.properties
+          this.savePlayer(gameManager.player)
+          gameManager.emit('playerUpdated', gameManager.player)
+        }
+
+        return {
+          success: true,
+          amount: data.amount,
+          syncStatus: SyncStatus.SYNCED
+        }
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          return { success: false, error: error.message }
+        }
+        console.log('[PropertyManager] Network error, executing locally')
+      }
+    }
+
+    // Offline fallback
+    return this._collectOffline(propertyId)
+  }
+
+  /**
+   * Execute collect offline and queue for sync
+   */
+  _collectOffline(propertyId) {
+    const player = this.getPlayer()
+    const result = this.collectIncome(propertyId, player)
+
+    if (result.success) {
+      this.savePlayer(player)
+      gameManager.player = player
+      gameManager.emit('playerUpdated', player)
+
+      // Queue for sync
+      offlineQueue.enqueue({
+        type: ActionTypes.PROPERTY,
+        data: { operation: 'collect', propertyId },
+        localResult: {
+          cashGained: result.amount
+        }
+      })
+
+      result.syncStatus = SyncStatus.PENDING
+    }
+
+    return result
+  }
+
+  /**
+   * Collect all income (server-first with offline fallback)
+   * @returns {Promise<Object>} Result with success status
+   */
+  async collectAllAndSave() {
+    const isOnline = offlineQueue.getIsOnline()
+
+    if (isOnline && !gameManager.useLocalData) {
+      try {
+        const result = await playerService.collectAllPropertyIncome()
+        const data = result.data || result
+
+        // Update local player state
+        if (data.player) {
+          if (data.player.cash !== undefined) gameManager.player.cash = data.player.cash
+          if (data.player.properties) gameManager.player.properties = data.player.properties
+          this.savePlayer(gameManager.player)
+          gameManager.emit('playerUpdated', gameManager.player)
+        }
+
+        return {
+          success: true,
+          totalAmount: data.totalAmount || data.amount,
+          syncStatus: SyncStatus.SYNCED
+        }
+      } catch (error) {
+        if (!this._isNetworkError(error)) {
+          return { success: false, error: error.message }
+        }
+        console.log('[PropertyManager] Network error, executing locally')
+      }
+    }
+
+    // Offline fallback
+    return this._collectAllOffline()
+  }
+
+  /**
+   * Execute collect all offline and queue for sync
+   */
+  _collectAllOffline() {
+    const player = this.getPlayer()
+    const result = this.collectAllIncome(player)
+
+    if (result.success && result.totalAmount > 0) {
+      this.savePlayer(player)
+      gameManager.player = player
+      gameManager.emit('playerUpdated', player)
+
+      // Queue for sync
+      offlineQueue.enqueue({
+        type: ActionTypes.PROPERTY,
+        data: { operation: 'collect-all' },
+        localResult: {
+          cashGained: result.totalAmount
+        }
+      })
+
+      result.syncStatus = SyncStatus.PENDING
     }
 
     return result

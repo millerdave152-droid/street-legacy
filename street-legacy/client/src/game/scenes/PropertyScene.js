@@ -17,6 +17,7 @@ import {
 import { propertyManager } from '../managers/PropertyManager'
 import { audioManager } from '../managers/AudioManager'
 import { COLORS, BORDERS, DEPTH, getTextStyle, getTerminalStyle, toHexString, SYMBOLS } from '../ui/NetworkTheme'
+import offlineQueue, { SyncStatus } from '../../services/OfflineQueue'
 
 /**
  * PropertyScene - Full property management system
@@ -685,27 +686,24 @@ export class PropertyScene extends Phaser.Scene {
 
   async sellProperty(property, sellValue) {
     try {
-      // Try API first
-      try {
-        await gameManager.sellProperty(property.id)
-      } catch (e) {
-        // Fallback to propertyManager
-        console.log('[PropertyScene] API failed, using propertyManager for sell')
-        const result = propertyManager.sellAndSave(property.id)
-        if (!result.success) {
-          this.showErrorToast(result.error || 'Sale failed')
-          return
-        }
+      // Use propertyManager which handles server-first with offline fallback
+      const result = await propertyManager.sellAndSave(property.id)
+
+      if (!result.success) {
+        this.showErrorToast(result.error || 'Sale failed')
+        return
       }
 
       // Refresh data and UI
       const player = propertyManager.getPlayer()
+      const actualSellValue = result.saleValue || sellValue
       this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       this.updateBenefitsDisplay()
-      this.showSuccessToast(`Sold ${property.name} for ${formatMoney(sellValue)}!`)
+      const syncIndicator = this._getSyncIndicator(result.syncStatus)
+      this.showSuccessToast(`${syncIndicator} Sold ${property.name} for ${formatMoney(actualSellValue)}!`)
       await this.loadPropertyData()
 
-      try { audioManager.playCashGain(sellValue) } catch (e) { /* ignore */ }
+      try { audioManager.playCashGain(actualSellValue) } catch (e) { /* ignore */ }
     } catch (error) {
       this.showErrorToast(error.message || 'Sale failed')
     }
@@ -1450,22 +1448,18 @@ export class PropertyScene extends Phaser.Scene {
 
   async purchaseProperty(property) {
     try {
-      // Try API first
-      try {
-        await gameManager.buyProperty(property.id)
-      } catch (e) {
-        // Fallback to propertyManager
-        console.log('[PropertyScene] API failed, using propertyManager for purchase')
-        const result = propertyManager.buyAndSave(property.id)
-        if (!result.success) {
-          this.showErrorToast(result.error || 'Purchase failed')
-          return
-        }
+      // Use propertyManager which handles server-first with offline fallback
+      const result = await propertyManager.buyAndSave(property.id)
+
+      if (!result.success) {
+        this.showErrorToast(result.error || 'Purchase failed')
+        return
       }
 
       // Refresh data and UI
       const player = propertyManager.getPlayer()
-      this.showSuccessToast(`Purchased ${property.name}!`)
+      const syncIndicator = this._getSyncIndicator(result.syncStatus)
+      this.showSuccessToast(`${syncIndicator} Purchased ${property.name}!`)
       this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
       this.switchTab('owned')
@@ -1491,22 +1485,18 @@ export class PropertyScene extends Phaser.Scene {
 
   async upgradeProperty(property) {
     try {
-      // Try API first
-      try {
-        await gameManager.upgradeProperty(property.id)
-      } catch (e) {
-        // Fallback to propertyManager
-        console.log('[PropertyScene] API failed, using propertyManager for upgrade')
-        const result = propertyManager.upgradeAndSave(property.id)
-        if (!result.success) {
-          this.showErrorToast(result.error || 'Upgrade failed')
-          return
-        }
+      // Use propertyManager which handles server-first with offline fallback
+      const result = await propertyManager.upgradeAndSave(property.id)
+
+      if (!result.success) {
+        this.showErrorToast(result.error || 'Upgrade failed')
+        return
       }
 
       // Refresh data and UI
       const player = propertyManager.getPlayer()
-      this.showSuccessToast(`${property.name} upgraded!`)
+      const syncIndicator = this._getSyncIndicator(result.syncStatus)
+      this.showSuccessToast(`${syncIndicator} ${property.name} upgraded!`)
       this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
     } catch (error) {
@@ -1518,23 +1508,19 @@ export class PropertyScene extends Phaser.Scene {
     const pendingIncome = property.pending_income || 0
 
     try {
-      // Try API first
-      try {
-        await gameManager.collectPropertyIncome(property.id)
-      } catch (e) {
-        // Fallback to propertyManager
-        console.log('[PropertyScene] API failed, using propertyManager for collect')
-        const result = propertyManager.collectAndSave(property.id)
-        if (!result.success) {
-          this.showErrorToast(result.error || 'Collection failed')
-          return
-        }
+      // Use propertyManager which handles server-first with offline fallback
+      const result = await propertyManager.collectAndSave(property.id)
+
+      if (!result.success) {
+        this.showErrorToast(result.error || 'Collection failed')
+        return
       }
 
       // Refresh data and UI
       const player = propertyManager.getPlayer()
-      try { audioManager.playCashGain(pendingIncome) } catch (e) { /* ignore */ }
-      this.showSuccessToast(`Collected ${formatMoney(pendingIncome)}!`)
+      try { audioManager.playCashGain(result.amount || pendingIncome) } catch (e) { /* ignore */ }
+      const syncIndicator = this._getSyncIndicator(result.syncStatus)
+      this.showSuccessToast(`${syncIndicator} Collected ${formatMoney(result.amount || pendingIncome)}!`)
       this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
     } catch (error) {
@@ -1551,27 +1537,46 @@ export class PropertyScene extends Phaser.Scene {
     }
 
     try {
-      // Try API first
-      try {
-        await gameManager.collectAllPropertyIncome()
-      } catch (e) {
-        // Fallback to propertyManager
-        console.log('[PropertyScene] API failed, using propertyManager for collectAll')
-        const result = propertyManager.collectAllAndSave()
-        if (!result.success || result.totalAmount <= 0) {
-          this.showErrorToast('Collection failed')
-          return
-        }
+      // Use propertyManager which handles server-first with offline fallback
+      const result = await propertyManager.collectAllAndSave()
+
+      if (!result.success) {
+        this.showErrorToast(result.error || 'Collection failed')
+        return
       }
 
       // Refresh data and UI
       const player = propertyManager.getPlayer()
-      try { audioManager.playCashGain(totalPending) } catch (e) { /* ignore */ }
-      this.showSuccessToast(`Collected ${formatMoney(totalPending)}!`)
+      const collectedAmount = result.totalAmount || totalPending
+      try { audioManager.playCashGain(collectedAmount) } catch (e) { /* ignore */ }
+      const syncIndicator = this._getSyncIndicator(result.syncStatus)
+      this.showSuccessToast(`${syncIndicator} Collected ${formatMoney(collectedAmount)}!`)
       this.cashText.setText(`$ ${formatMoney(player.cash)}`)
       await this.loadPropertyData()
     } catch (error) {
       this.showErrorToast(error.message || 'Collection failed')
+    }
+  }
+
+  /**
+   * Get sync status indicator for toast messages
+   * @param {string} syncStatus - The sync status from property operations
+   * @returns {string} - Icon indicator for the status
+   */
+  _getSyncIndicator(syncStatus) {
+    switch (syncStatus) {
+      case SyncStatus.SYNCED:
+        return '✓'
+      case SyncStatus.PENDING:
+        return '⏳'
+      case SyncStatus.SYNCING:
+        return '⟳'
+      case SyncStatus.ADJUSTED:
+        return '⚠️'
+      case SyncStatus.REJECTED:
+        return '✗'
+      default:
+        return '✓'
     }
   }
 
