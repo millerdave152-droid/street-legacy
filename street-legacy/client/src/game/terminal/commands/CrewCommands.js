@@ -65,6 +65,12 @@ export function registerCrewCommands() {
     aliases: ['team', 'gang', 'members'],
     handler: async ({ args }) => {
       const player = gameManager.player
+
+      // Handle 'crew profile' subcommand
+      if (args.length > 0 && args[0].toLowerCase() === 'profile') {
+        return showCrewProfile(player)
+      }
+
       if (!player || !player.crew || player.crew.length === 0) {
         return {
           output: [
@@ -132,14 +138,15 @@ export function registerCrewCommands() {
       })
       output.push({ text: '', type: 'response' })
       output.push({ text: '  Commands:', type: 'system' })
+      output.push({ text: '    crew profile    - View crew profile & stats', type: 'response' })
       output.push({ text: '    crew <name>     - View member details', type: 'response' })
       output.push({ text: '    deploy <name> <mission> - Send on mission', type: 'response' })
       output.push({ text: '    talk <name>     - Talk to crew member', type: 'response' })
 
       return { output }
     },
-    help: 'View your crew members',
-    usage: 'crew [member_name]',
+    help: 'View your crew members or crew profile',
+    usage: 'crew [profile | member_name]',
     category: CATEGORIES.INFO,
     minLevel: 1,
   })
@@ -564,6 +571,128 @@ function createProgressBar(percent, width = 10) {
   const filled = Math.round((percent / 100) * width)
   const empty = width - filled
   return '[' + '='.repeat(filled) + '-'.repeat(empty) + ']'
+}
+
+/**
+ * Format money with commas
+ */
+function formatMoney(amount) {
+  if (amount >= 1000000) {
+    return `$${(amount / 1000000).toFixed(1)}M`
+  } else if (amount >= 1000) {
+    return `$${(amount / 1000).toFixed(1)}K`
+  }
+  return `$${amount.toLocaleString()}`
+}
+
+/**
+ * Show crew profile with identity and stats
+ */
+function showCrewProfile(player) {
+  if (!player) {
+    return { error: true, message: 'Player data not available.' }
+  }
+
+  // Get crew data - could be player's personal crew or a formal crew
+  const crewName = player.crew_name || player.crewName || 'Your Crew'
+  const crewTag = player.crew_tag || player.crewTag || null
+  const crewMembers = player.crew || []
+
+  const output = [
+    { text: '╔══════════════════════════════════════════╗', type: 'system' },
+    { text: '║           CREW PROFILE                   ║', type: 'system' },
+    { text: '╚══════════════════════════════════════════╝', type: 'system' },
+    { text: '', type: 'response' },
+  ]
+
+  // Crew Identity
+  const displayName = crewTag ? `[${crewTag}] ${crewName}` : crewName
+  output.push({ text: `  ${displayName}`, type: 'handler' })
+  output.push({ text: '', type: 'response' })
+
+  // Stats section
+  output.push({ text: '  ─── STATS ───', type: 'system' })
+
+  // Member count
+  const memberCount = crewMembers.length
+  output.push({
+    text: `  Members: ${memberCount}`,
+    type: 'response'
+  })
+
+  // Calculate net worth (player cash + bank + crew value)
+  const playerCash = player.cash || 0
+  const playerBank = player.bank || player.bankBalance || 0
+  const crewValue = crewMembers.reduce((sum, m) => {
+    // Estimate crew member value based on skill and loyalty
+    const skill = m.skill || 50
+    const loyalty = m.loyalty || 50
+    return sum + Math.round((skill + loyalty) * 100)
+  }, 0)
+  const totalNetWorth = playerCash + playerBank + crewValue
+
+  output.push({
+    text: `  Net Worth: ${formatMoney(totalNetWorth)}`,
+    type: 'success'
+  })
+  output.push({
+    text: `    Cash: ${formatMoney(playerCash)} | Bank: ${formatMoney(playerBank)}`,
+    type: 'response'
+  })
+
+  // Best heist (from player stats if available)
+  const bestHeist = player.best_heist_payout || player.bestHeistPayout || 0
+  const bestHeistName = player.best_heist_name || player.bestHeistName || 'N/A'
+  if (bestHeist > 0) {
+    output.push({ text: '', type: 'response' })
+    output.push({ text: '  ─── BEST HEIST ───', type: 'system' })
+    output.push({
+      text: `  ${formatMoney(bestHeist)} - ${bestHeistName}`,
+      type: 'warning'
+    })
+  }
+
+  // Crew roster
+  if (crewMembers.length > 0) {
+    output.push({ text: '', type: 'response' })
+    output.push({ text: '  ─── ROSTER ───', type: 'system' })
+
+    crewMembers.forEach(member => {
+      const role = ROLE_DISPLAY[member.role] || { icon: '[?]', name: 'Unknown' }
+      const skill = member.skill || 50
+      const loyalty = member.loyalty || 50
+      const avgStat = Math.round((skill + loyalty) / 2)
+
+      // Color based on average stats
+      const statType = avgStat >= 70 ? 'success' : avgStat >= 40 ? 'response' : 'warning'
+
+      output.push({
+        text: `  ${role.icon} ${member.name.padEnd(12)} Skill: ${skill}% | Loyalty: ${loyalty}%`,
+        type: statType
+      })
+    })
+  } else {
+    output.push({ text: '', type: 'response' })
+    output.push({
+      text: '  No crew members yet. Type "go crew" to hire.',
+      type: 'system'
+    })
+  }
+
+  // Get synergy bonus if available
+  if (crewMembers.length > 0) {
+    const synergy = crewBonusManager.getCrewSynergy()
+    output.push({ text: '', type: 'response' })
+    output.push({
+      text: `  Synergy: ${synergy.description} (+${synergy.bonus}% bonus)`,
+      type: synergy.level >= 3 ? 'success' : 'system'
+    })
+  }
+
+  output.push({ text: '', type: 'response' })
+  output.push({ text: '╔══════════════════════════════════════════╗', type: 'system' })
+
+  return { output }
 }
 
 export default registerCrewCommands
