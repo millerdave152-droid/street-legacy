@@ -29,7 +29,7 @@ export class CrewScene extends Phaser.Scene {
   init(data) {
     this.initData = data || {}
     // Allow external tab selection (e.g., from ConnectionsHubScene)
-    if (data?.tab && ['hire', 'crew', 'train'].includes(data.tab)) {
+    if (data?.tab && ['hire', 'crew', 'train', 'profile'].includes(data.tab)) {
       this.initialTab = data.tab
     } else {
       this.initialTab = 'hire'
@@ -302,22 +302,26 @@ export class CrewScene extends Phaser.Scene {
   createTabs() {
     const { width } = this.cameras.main
     const tabY = 175
-    const tabWidth = (width - 60) / 3
-    const tabSpacing = 5
+    const tabWidth = (width - 70) / 4
+    const tabSpacing = 4
 
     this.tabs = {}
 
     // Hire tab
-    const hireX = 20 + tabWidth / 2
-    this.tabs.hire = this.createTab(hireX, tabY, tabWidth, '[H] Hire', true)
+    const hireX = 18 + tabWidth / 2
+    this.tabs.hire = this.createTab(hireX, tabY, tabWidth, '[H] Hire', this.initialTab === 'hire')
 
     // Your Crew tab
-    const crewX = 20 + tabWidth + tabSpacing + tabWidth / 2
-    this.tabs.crew = this.createTab(crewX, tabY, tabWidth, '[C] Crew', false)
+    const crewX = 18 + tabWidth + tabSpacing + tabWidth / 2
+    this.tabs.crew = this.createTab(crewX, tabY, tabWidth, '[C] Crew', this.initialTab === 'crew')
 
     // Training tab
-    const trainX = width - 20 - tabWidth / 2
-    this.tabs.train = this.createTab(trainX, tabY, tabWidth, '[T] Train', false)
+    const trainX = 18 + (tabWidth + tabSpacing) * 2 + tabWidth / 2
+    this.tabs.train = this.createTab(trainX, tabY, tabWidth, '[T] Train', this.initialTab === 'train')
+
+    // Profile tab
+    const profileX = width - 18 - tabWidth / 2
+    this.tabs.profile = this.createTab(profileX, tabY, tabWidth, '[P] Profile', this.initialTab === 'profile')
   }
 
   createTab(x, y, tabWidth, label, isActive) {
@@ -335,7 +339,7 @@ export class CrewScene extends Phaser.Scene {
       fontStyle: isActive ? 'bold' : 'normal'
     }).setOrigin(0.5).setDepth(11)
 
-    const tabKey = label.includes('Hire') ? 'hire' : (label.includes('Train') ? 'train' : 'crew')
+    const tabKey = label.includes('Hire') ? 'hire' : (label.includes('Train') ? 'train' : (label.includes('Profile') ? 'profile' : 'crew'))
 
     bg.on('pointerover', () => {
       if (this.activeTab !== tabKey) {
@@ -526,6 +530,8 @@ export class CrewScene extends Phaser.Scene {
       this.renderHireTab()
     } else if (this.activeTab === 'train') {
       this.renderTrainTab()
+    } else if (this.activeTab === 'profile') {
+      this.renderProfileTab()
     } else {
       this.renderCrewTab()
     }
@@ -805,6 +811,196 @@ export class CrewScene extends Phaser.Scene {
     this.showToast(`Trained ${member.name.split('"')[1] || 'crew member'}!`, true)
     try { audioManager.playClick() } catch (e) { /* ignore */ }
     this.renderContent()
+  }
+
+  renderProfileTab() {
+    const { width } = this.cameras.main
+    const player = gameManager.player || getPlayerData()
+
+    let y = this.SCROLL_START_Y - this.scrollOffset
+
+    // Crew identity card
+    const identityBg = this.add.rectangle(width / 2, y + 80, this.CARD_WIDTH, 150, 0x1e293b, 0.95)
+      .setStrokeStyle(2, 0xf59e0b)
+      .setDepth(10)
+    this.contentItems.push(identityBg)
+
+    // Crew emblem placeholder (circle)
+    const emblemBg = this.add.circle(width / 2, y + 40, 35, 0xf59e0b, 0.3)
+      .setStrokeStyle(2, 0xf59e0b)
+      .setDepth(11)
+    this.contentItems.push(emblemBg)
+
+    const emblemIcon = this.add.text(width / 2, y + 40, '[C]', {
+      fontSize: '28px',
+      color: '#f59e0b',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(12)
+    this.contentItems.push(emblemIcon)
+
+    // Crew name / player name
+    const crewName = player.crewName || `${player.username || 'Player'}'s Crew`
+    const nameText = this.add.text(width / 2, y + 85, crewName, {
+      fontSize: '16px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(11)
+    this.contentItems.push(nameText)
+
+    // Crew tag
+    const tagText = this.add.text(width / 2, y + 105, `[${player.crewTag || 'CREW'}]`, {
+      fontSize: '12px',
+      color: '#f59e0b'
+    }).setOrigin(0.5).setDepth(11)
+    this.contentItems.push(tagText)
+
+    // Stats row
+    const statsY = y + 130
+    const statSpacing = (this.CARD_WIDTH - 40) / 3
+
+    // Members count
+    const membersLabel = this.add.text(30, statsY, 'Members', {
+      fontSize: '9px',
+      color: '#888888'
+    }).setDepth(11)
+    this.contentItems.push(membersLabel)
+
+    const membersValue = this.add.text(30, statsY + 14, `${this.myCrewMembers.length}/${this.crewSlots.max}`, {
+      fontSize: '14px',
+      color: '#3b82f6',
+      fontStyle: 'bold'
+    }).setDepth(11)
+    this.contentItems.push(membersValue)
+
+    // Total Net Worth
+    const netWorth = this.calculateCrewNetWorth()
+    const netWorthLabel = this.add.text(30 + statSpacing, statsY, 'Net Worth', {
+      fontSize: '9px',
+      color: '#888888'
+    }).setDepth(11)
+    this.contentItems.push(netWorthLabel)
+
+    const netWorthValue = this.add.text(30 + statSpacing, statsY + 14, formatMoney(netWorth), {
+      fontSize: '14px',
+      color: '#22c55e',
+      fontStyle: 'bold'
+    }).setDepth(11)
+    this.contentItems.push(netWorthValue)
+
+    // Best Heist
+    const bestHeist = this.getBestHeistPayout()
+    const heistLabel = this.add.text(30 + statSpacing * 2, statsY, 'Best Heist', {
+      fontSize: '9px',
+      color: '#888888'
+    }).setDepth(11)
+    this.contentItems.push(heistLabel)
+
+    const heistValue = this.add.text(30 + statSpacing * 2, statsY + 14, formatMoney(bestHeist), {
+      fontSize: '14px',
+      color: '#f59e0b',
+      fontStyle: 'bold'
+    }).setDepth(11)
+    this.contentItems.push(heistValue)
+
+    y += 170
+
+    // Member list header
+    const memberHeaderBg = this.add.rectangle(width / 2, y + 15, this.CARD_WIDTH, 30, 0x1a2a1a, 0.95)
+      .setStrokeStyle(1, 0x22c55e)
+      .setDepth(10)
+    this.contentItems.push(memberHeaderBg)
+
+    const memberHeader = this.add.text(25, y + 15, `${SYMBOLS.system} CREW ROSTER`, {
+      fontSize: '11px',
+      color: '#22c55e',
+      fontStyle: 'bold'
+    }).setOrigin(0, 0.5).setDepth(11)
+    this.contentItems.push(memberHeader)
+
+    y += 40
+
+    // Member list
+    if (this.myCrewMembers.length === 0) {
+      const emptyText = this.add.text(width / 2, y + 30, 'No crew members yet', {
+        fontSize: '12px',
+        color: '#666666'
+      }).setOrigin(0.5).setDepth(10)
+      this.contentItems.push(emptyText)
+    } else {
+      this.myCrewMembers.forEach((member, index) => {
+        const memberY = y + index * 45
+
+        if (memberY + 40 > this.SCROLL_START_Y - 10 && memberY < this.SCROLL_END_Y) {
+          this.renderProfileMemberRow(member, memberY)
+        }
+      })
+    }
+  }
+
+  renderProfileMemberRow(member, y) {
+    const { width } = this.cameras.main
+    const roleConfig = this.ROLE_CONFIG[member.role] || { icon: '👤', color: 0x6b7280 }
+
+    // Row background
+    const rowBg = this.add.rectangle(width / 2, y + 18, this.CARD_WIDTH, 40, 0x1e293b, 0.8)
+      .setStrokeStyle(1, roleConfig.color, 0.5)
+      .setDepth(10)
+    this.contentItems.push(rowBg)
+
+    // Icon
+    const icon = this.add.text(30, y + 18, roleConfig.icon, {
+      fontSize: '18px'
+    }).setOrigin(0.5).setDepth(11)
+    this.contentItems.push(icon)
+
+    // Name
+    const displayName = member.name.split('"')[1] || member.name.substring(0, 15)
+    const nameText = this.add.text(50, y + 10, displayName, {
+      fontSize: '11px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    }).setDepth(11)
+    this.contentItems.push(nameText)
+
+    // Role
+    const roleText = this.add.text(50, y + 24, member.role.toUpperCase(), {
+      fontSize: '9px',
+      color: roleConfig.textColor
+    }).setDepth(11)
+    this.contentItems.push(roleText)
+
+    // Level
+    const levelText = this.add.text(width - 100, y + 12, `Lv.${member.level}`, {
+      fontSize: '10px',
+      color: '#888888'
+    }).setDepth(11)
+    this.contentItems.push(levelText)
+
+    // Skill
+    const skillText = this.add.text(width - 100, y + 24, `${member.skill}% skill`, {
+      fontSize: '9px',
+      color: '#3b82f6'
+    }).setDepth(11)
+    this.contentItems.push(skillText)
+
+    // Loyalty indicator
+    const loyaltyColor = member.loyalty > 70 ? 0x22c55e : (member.loyalty > 40 ? 0xf59e0b : 0xef4444)
+    const loyaltyDot = this.add.circle(width - 30, y + 18, 6, loyaltyColor)
+      .setDepth(11)
+    this.contentItems.push(loyaltyDot)
+  }
+
+  calculateCrewNetWorth() {
+    const player = gameManager.player || getPlayerData()
+    // Player's cash + bank + crew value
+    const playerWealth = (player.cash || 0) + (player.bank || 0)
+    const crewValue = this.myCrewMembers.reduce((sum, m) => sum + (m.hire_cost || 0), 0)
+    return playerWealth + crewValue
+  }
+
+  getBestHeistPayout() {
+    const player = gameManager.player || getPlayerData()
+    return player.bestHeistPayout || 0
   }
 
   renderBonusSummary(y, bonuses) {

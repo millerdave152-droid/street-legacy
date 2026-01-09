@@ -116,4 +116,151 @@ router.get('/crews', async (_req, res) => {
   }
 });
 
+// =============================================================================
+// WEEKLY LEADERBOARDS
+// =============================================================================
+
+// GET /api/leaderboard/weekly/cash - Most cash earned this week
+router.get('/weekly/cash', async (_req, res) => {
+  try {
+    const weekStart = getWeekStart();
+    const result = await pool.query(
+      `SELECT ws.player_id, p.username, p.display_name, p.level, ws.cash_earned
+       FROM weekly_player_stats ws
+       JOIN players p ON ws.player_id = p.id
+       WHERE ws.week_start = $1 AND ws.cash_earned > 0
+       ORDER BY ws.cash_earned DESC
+       LIMIT 50`,
+      [weekStart]
+    );
+
+    res.json({
+      success: true,
+      category: 'cash',
+      weekStart,
+      data: result.rows.map((row, index) => ({
+        rank: index + 1,
+        playerId: row.player_id,
+        username: row.username,
+        displayName: row.display_name,
+        level: row.level,
+        value: parseInt(row.cash_earned)
+      }))
+    });
+  } catch (error) {
+    console.error('Weekly cash leaderboard error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get weekly cash leaderboard' });
+  }
+});
+
+// GET /api/leaderboard/weekly/heat - Most heat accumulated this week
+router.get('/weekly/heat', async (_req, res) => {
+  try {
+    const weekStart = getWeekStart();
+    const result = await pool.query(
+      `SELECT ws.player_id, p.username, p.display_name, p.level, ws.heat_accumulated
+       FROM weekly_player_stats ws
+       JOIN players p ON ws.player_id = p.id
+       WHERE ws.week_start = $1 AND ws.heat_accumulated > 0
+       ORDER BY ws.heat_accumulated DESC
+       LIMIT 50`,
+      [weekStart]
+    );
+
+    res.json({
+      success: true,
+      category: 'heat',
+      weekStart,
+      data: result.rows.map((row, index) => ({
+        rank: index + 1,
+        playerId: row.player_id,
+        username: row.username,
+        displayName: row.display_name,
+        level: row.level,
+        value: parseInt(row.heat_accumulated)
+      }))
+    });
+  } catch (error) {
+    console.error('Weekly heat leaderboard error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get weekly heat leaderboard' });
+  }
+});
+
+// GET /api/leaderboard/weekly/heist - Biggest single heist this week
+router.get('/weekly/heist', async (_req, res) => {
+  try {
+    const weekStart = getWeekStart();
+    const result = await pool.query(
+      `SELECT ws.player_id, p.username, p.display_name, p.level,
+              ws.biggest_heist_payout, ws.biggest_heist_name
+       FROM weekly_player_stats ws
+       JOIN players p ON ws.player_id = p.id
+       WHERE ws.week_start = $1 AND ws.biggest_heist_payout > 0
+       ORDER BY ws.biggest_heist_payout DESC
+       LIMIT 50`,
+      [weekStart]
+    );
+
+    res.json({
+      success: true,
+      category: 'heist',
+      weekStart,
+      data: result.rows.map((row, index) => ({
+        rank: index + 1,
+        playerId: row.player_id,
+        username: row.username,
+        displayName: row.display_name,
+        level: row.level,
+        value: parseInt(row.biggest_heist_payout),
+        heistName: row.biggest_heist_name
+      }))
+    });
+  } catch (error) {
+    console.error('Weekly heist leaderboard error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get weekly heist leaderboard' });
+  }
+});
+
+// GET /api/leaderboard/weekly/property - Most property value gained this week
+router.get('/weekly/property', async (_req, res) => {
+  try {
+    const weekStart = getWeekStart();
+    const result = await pool.query(
+      `SELECT ws.player_id, p.username, p.display_name, p.level, ws.property_value_gained
+       FROM weekly_player_stats ws
+       JOIN players p ON ws.player_id = p.id
+       WHERE ws.week_start = $1 AND ws.property_value_gained > 0
+       ORDER BY ws.property_value_gained DESC
+       LIMIT 50`,
+      [weekStart]
+    );
+
+    res.json({
+      success: true,
+      category: 'property',
+      weekStart,
+      data: result.rows.map((row, index) => ({
+        rank: index + 1,
+        playerId: row.player_id,
+        username: row.username,
+        displayName: row.display_name,
+        level: row.level,
+        value: parseInt(row.property_value_gained)
+      }))
+    });
+  } catch (error) {
+    console.error('Weekly property leaderboard error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get weekly property leaderboard' });
+  }
+});
+
+// Helper function to get Monday of current week
+function getWeekStart(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Sunday
+  const monday = new Date(now.setDate(diff));
+  return monday.toISOString().split('T')[0];
+}
+
 export default router;
