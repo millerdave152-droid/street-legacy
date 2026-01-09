@@ -16,6 +16,8 @@ import { responseGenerator } from './ResponseGenerator'
 import { aiIntelAnalyzer } from './AIIntelAnalyzer'
 import { sarahPersonality } from './SarahPersonality'
 import { messageQueue, PRIORITY, MESSAGE_TYPES } from '../terminal/MessageQueue'
+import { questlineManager } from '../managers/QuestlineManager'
+import { progressionManager } from '../managers/ProgressionManager'
 
 // Trigger thresholds and cooldowns
 const TRIGGERS = {
@@ -78,6 +80,22 @@ const TRIGGERS = {
     cooldown: 15 * 60 * 1000, // 15 minutes - rare but special
     chance: 0.1, // 10% chance on each check for trusted+ users
   },
+
+  // PROGRESSION TRIGGERS
+  QUEST_REMINDER: {
+    cooldown: 10 * 60 * 1000, // 10 minutes
+    inactivityThreshold: 10 * 60 * 1000, // 10 minutes of no quest progress
+  },
+  MILESTONE_APPROACHING: {
+    cooldown: 15 * 60 * 1000, // 15 minutes
+    xpThreshold: 0.8, // Within 80% of milestone level
+  },
+  BAND_TRANSITION: {
+    cooldown: 0, // Always notify
+  },
+  QUEST_COMPLETED: {
+    cooldown: 0, // Always congratulate
+  },
 }
 
 class ProactiveMonitor {
@@ -102,6 +120,7 @@ class ProactiveMonitor {
       gameManager.on('levelUp', this.onLevelUp.bind(this))
       gameManager.on('aiMessage', this.onAIMessage.bind(this))
       gameManager.on('tradeOffer', this.onTradeOffer.bind(this))
+      gameManager.on('questCompleted', this.onQuestCompleted.bind(this))
     }
 
     // Also set up periodic check as fallback
@@ -137,15 +156,49 @@ class ProactiveMonitor {
    * Handle level up events
    */
   onLevelUp(data) {
-    if (!this.shouldNotify('levelUp')) return
+    const newLevel = data.newLevel || data.level
+    const oldLevel = data.oldLevel || (newLevel - 1)
 
-    const message = responseGenerator.generateProactiveMessage('levelUp', {
-      level: data.newLevel || data.level,
-    })
+    // Check for band transition
+    const oldBand = progressionManager.getBand(oldLevel)
+    const newBand = progressionManager.getBand(newLevel)
 
-    if (message) {
-      this.sendNotification('levelUp', message)
+    if (oldBand !== newBand) {
+      const bandInfo = progressionManager.getBandInfo(newLevel)
+      this.sendNotification('bandTransition',
+        `Congratulations! You've reached the ${bandInfo.label} tier. New opportunities await. Type 'goals' to see your new objectives.`,
+        PRIORITY.HIGH
+      )
     }
+
+    // Regular level up message
+    if (this.shouldNotify('levelUp')) {
+      const message = responseGenerator.generateProactiveMessage('levelUp', {
+        level: newLevel,
+      })
+
+      if (message) {
+        this.sendNotification('levelUp', message)
+      }
+    }
+  }
+
+  /**
+   * Handle quest completion events
+   */
+  onQuestCompleted(data) {
+    const { questId, nextQuest } = data
+
+    // Congratulate on quest completion
+    let message = `Nice work completing "${questId.replace(/_/g, ' ').toLowerCase()}".`
+
+    if (nextQuest) {
+      message += ` Your next objective is ready. Type 'quest' to see it.`
+    } else {
+      message += ` You've finished the onboarding questline - you're ready for the real game now.`
+    }
+
+    this.sendNotification('questCompleted', message, PRIORITY.HIGH)
   }
 
   /**
@@ -270,6 +323,12 @@ class ProactiveMonitor {
 
     // Insider tip check (only for trusted+ users)
     this.checkInsiderTip()
+
+    // Quest progress check
+    this.checkQuestProgress()
+
+    // Milestone approaching check
+    this.checkMilestoneApproaching(playerData)
 
     // Store state for comparison
     this.previousPlayerState = { ...playerData }
@@ -420,6 +479,58 @@ class ProactiveMonitor {
     }
 
     console.log(`[ProactiveMonitor] Triggered: ${triggerType}`)
+  }
+
+  /**
+   * Check if player needs a quest reminder
+   */
+  checkQuestProgress() {
+    try {
+      // Skip if questline is complete
+      if (questlineManager.isComplete()) return
+
+      const progress = questlineManager.getQuestProgress()
+      if (!progress.hasActiveQuest) return
+
+      // Check if player has been inactive on quest
+      const timeSinceActivity = questlineManager.getTimeSinceActivity()
+      if (timeSinceActivity >= TRIGGERS.QUEST_REMINDER.inactivityThreshold) {
+        if (this.shouldNotify('questReminder')) {
+          const quest = progress.quest
+          this.sendNotification('questReminder',
+            `Don't forget your current objective: ${quest.title}. ${quest.sarahHint}`
+          )
+        }
+      }
+    } catch (e) {
+      // Questline manager may not be initialized
+    }
+  }
+
+  /**
+   * Check if player is approaching a milestone
+   */
+  checkMilestoneApproaching(playerData) {
+    try {
+      const level = playerData.level || 1
+      const milestone = progressionManager.getNextMilestone(level)
+
+      if (!milestone) return
+
+      // Calculate how close we are to the milestone level
+      const levelsToMilestone = milestone.level - level
+
+      // Only notify if within 2 levels of milestone
+      if (levelsToMilestone <= 2 && levelsToMilestone > 0) {
+        if (this.shouldNotify('milestoneApproaching')) {
+          this.sendNotification('milestoneApproaching',
+            `You're ${levelsToMilestone === 1 ? '1 level' : `${levelsToMilestone} levels`} away from Level ${milestone.level}! That unlocks: ${milestone.description}`
+          )
+        }
+      }
+    } catch (e) {
+      // Progression manager may not be initialized
+    }
   }
 
   /**

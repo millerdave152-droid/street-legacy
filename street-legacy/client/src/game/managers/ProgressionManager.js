@@ -73,6 +73,70 @@ export const FEATURE_UNLOCKS = {
   LEGENDARY_HEISTS: 13
 }
 
+// Progression Bands - Player-facing progression tiers with goals and milestones
+export const PROGRESSION_BANDS = {
+  EARLY: {
+    levels: [1, 10],
+    label: 'Street Hustler',
+    goals: [
+      'Complete 10 petty crimes',
+      'Accumulate $10,000',
+      'Buy first property',
+      'Hire first crew member'
+    ],
+    typicalNetWorth: { min: 0, max: 50000 },
+    expectedCrew: { min: 0, max: 2 },
+    accessibleCrimes: ['pickpocket', 'shoplifting', 'mugging', 'car_theft', 'burglary'],
+    accessibleHeists: ['convenience_store'],
+    milestones: {
+      3: 'Street Smart - Unlocked medium crimes',
+      5: 'First Heist - Can attempt convenience store',
+      7: 'Expanding Operations - Criminal network forming',
+      10: 'Rising Star - Ready for crew recruitment'
+    }
+  },
+  MID: {
+    levels: [11, 25],
+    label: 'Criminal Operator',
+    goals: [
+      'Build crew to 5 members',
+      'Own 3 properties',
+      'Complete warehouse heist',
+      'Reach $500,000 net worth'
+    ],
+    typicalNetWorth: { min: 50000, max: 500000 },
+    expectedCrew: { min: 2, max: 8 },
+    accessibleCrimes: ['armed_robbery', 'bank_robbery', 'jewelry_heist'],
+    accessibleHeists: ['warehouse', 'jewelry_store', 'bank_vault'],
+    milestones: {
+      12: 'Crew Boss - Full crew access',
+      15: 'Major Player - High-tier crimes unlocked',
+      20: 'Criminal Empire - Bank operations available',
+      25: 'Kingpin Status - Elite tier approaching'
+    }
+  },
+  LATE: {
+    levels: [26, 50],
+    label: 'Crime Lord',
+    goals: [
+      'Control territory',
+      'Own 10+ properties',
+      'Complete casino heist',
+      'Reach $5,000,000 net worth'
+    ],
+    typicalNetWorth: { min: 500000, max: 10000000 },
+    expectedCrew: { min: 8, max: 20 },
+    accessibleCrimes: ['all'],
+    accessibleHeists: ['casino', 'federal_reserve', 'art_museum'],
+    milestones: {
+      30: 'Untouchable - Maximum heat resistance',
+      35: 'Legend - All crimes mastered',
+      40: 'Syndicate Leader - End-game heists',
+      50: 'Crime Lord - Peak progression'
+    }
+  }
+}
+
 const STORAGE_KEY = 'streetLegacy_progression'
 
 class ProgressionManager {
@@ -405,6 +469,110 @@ class ProgressionManager {
       lockedNPCs: this.getLockedNPCs(),
       unlockedFeatures: this.progression.unlockedFeatures,
       levelsToNextTier: nextTier ? nextTier.minLevel - level : 0
+    }
+  }
+
+  // ============================================================================
+  // PROGRESSION BAND HELPERS
+  // ============================================================================
+
+  /**
+   * Get the progression band (EARLY/MID/LATE) for a given level
+   */
+  getBand(level) {
+    if (level <= 10) return 'EARLY'
+    if (level <= 25) return 'MID'
+    return 'LATE'
+  }
+
+  /**
+   * Get full band info for a level
+   */
+  getBandInfo(level) {
+    const band = this.getBand(level)
+    return { key: band, ...PROGRESSION_BANDS[band] }
+  }
+
+  /**
+   * Get the next milestone level for a given level
+   */
+  getNextMilestone(level) {
+    const band = this.getBand(level)
+    const milestones = PROGRESSION_BANDS[band].milestones
+    const levels = Object.keys(milestones).map(Number).sort((a, b) => a - b)
+    const nextLevel = levels.find(l => l > level)
+
+    if (nextLevel) {
+      return {
+        level: nextLevel,
+        description: milestones[nextLevel]
+      }
+    }
+
+    // Check next band for milestones
+    if (band === 'EARLY' && level >= 10) {
+      const midMilestones = Object.keys(PROGRESSION_BANDS.MID.milestones).map(Number).sort((a, b) => a - b)
+      if (midMilestones.length > 0) {
+        return {
+          level: midMilestones[0],
+          description: PROGRESSION_BANDS.MID.milestones[midMilestones[0]]
+        }
+      }
+    } else if (band === 'MID' && level >= 25) {
+      const lateMilestones = Object.keys(PROGRESSION_BANDS.LATE.milestones).map(Number).sort((a, b) => a - b)
+      if (lateMilestones.length > 0) {
+        return {
+          level: lateMilestones[0],
+          description: PROGRESSION_BANDS.LATE.milestones[lateMilestones[0]]
+        }
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Get progress within current band as percentage
+   */
+  getProgressInBand(level) {
+    const bandInfo = this.getBandInfo(level)
+    const [min, max] = bandInfo.levels
+    const progress = level - min
+    const total = max - min
+    return {
+      current: progress,
+      total: total,
+      percent: Math.min(100, Math.round((progress / total) * 100))
+    }
+  }
+
+  /**
+   * Get current band goals
+   */
+  getCurrentGoals() {
+    const player = gameManager.player
+    const level = player?.level || 1
+    return this.getBandInfo(level).goals
+  }
+
+  /**
+   * Get full progression band summary for display
+   */
+  getBandSummary() {
+    const player = gameManager.player
+    const level = player?.level || 1
+    const bandInfo = this.getBandInfo(level)
+    const nextMilestone = this.getNextMilestone(level)
+    const progress = this.getProgressInBand(level)
+
+    return {
+      level,
+      band: bandInfo.key,
+      label: bandInfo.label,
+      goals: bandInfo.goals,
+      typicalNetWorth: bandInfo.typicalNetWorth,
+      nextMilestone,
+      progress
     }
   }
 

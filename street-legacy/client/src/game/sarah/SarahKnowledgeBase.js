@@ -196,6 +196,40 @@ export const STRATEGIC_ADVICE = {
   },
 }
 
+// Quest guidance for onboarding questline
+export const QUEST_GUIDANCE = {
+  FIRST_SCORE: {
+    stuck: "Having trouble? The 'crime list' command shows all available crimes. Pick the easiest one to get started.",
+    hint: "Pickpocketing has the highest success rate for beginners. Type 'crime pickpocket' to try it.",
+    encouragement: "Everyone starts somewhere. One small crime and you're in the game.",
+  },
+  BANK_YOUR_EARNINGS: {
+    stuck: "Need help banking? Type 'deposit <amount>' to put cash in your account. Banks keep it safe from... accidents.",
+    hint: "Just type 'deposit 100' to complete this. Your bank balance shows in 'status'.",
+    encouragement: "Smart criminals protect their earnings. This habit will save you later.",
+  },
+  BUILD_YOUR_STAKE: {
+    stuck: "Money coming slow? Try varying your crimes. Different crimes have different payouts and cooldowns.",
+    hint: "Crimes have cooldowns. Do multiple crime types to maximize earnings. Check 'crime list' for options.",
+    encouragement: "Patience pays. Keep grinding - that $5,000 is closer than you think.",
+  },
+  FIRST_PROPERTY: {
+    stuck: "Properties seem expensive? The cheapest ones start around $5,000. Keep grinding or check your bank balance.",
+    hint: "Type 'property list' to see what's available. A Small Apartment is $5,000 and pays $10/hour passive income.",
+    encouragement: "Properties are how empires are built. This investment will pay off every hour.",
+  },
+  CREW_UP: {
+    stuck: "Can't find crew members? You need to be Level 10 to unlock crew features. Check 'goals' to see your progression.",
+    hint: "Visit the crew hub to find recruits. Look for someone whose skills complement your play style.",
+    encouragement: "You can't do this alone forever. A good crew multiplies your power.",
+  },
+  FIRST_HEIST: {
+    stuck: "Heists require planning. Type 'heist list' to see available targets, then 'heist plan <id>' to start prep.",
+    hint: "Convenience Store is the easiest heist. It unlocks at Level 5 and pays $2,000-5,000 on success.",
+    encouragement: "This is what it's all about - the big score. Plan carefully and execute clean.",
+  },
+}
+
 // FAQ database
 export const FAQ = [
   {
@@ -421,6 +455,49 @@ class SarahKnowledgeBase {
     }
 
     return reasons.join(', ')
+  }
+
+  /**
+   * Get quest guidance for a specific quest
+   */
+  getQuestGuidance(questId, type = 'hint') {
+    const guidance = QUEST_GUIDANCE[questId]
+    if (!guidance) return null
+
+    switch (type) {
+      case 'stuck':
+        return guidance.stuck
+      case 'encouragement':
+        return guidance.encouragement
+      case 'hint':
+      default:
+        return guidance.hint
+    }
+  }
+
+  /**
+   * Get contextual quest help based on player state
+   */
+  getQuestHelp(questId, playerData) {
+    const guidance = QUEST_GUIDANCE[questId]
+    if (!guidance) return null
+
+    const responses = []
+
+    // Add primary hint
+    responses.push(guidance.hint)
+
+    // Add contextual advice based on player state
+    if (playerData) {
+      if (questId === 'BUILD_YOUR_STAKE' && playerData.cash < 1000) {
+        responses.push("Your cash is low. Focus on quick crimes to build up funds.")
+      }
+      if (questId === 'FIRST_PROPERTY' && playerData.cash + (playerData.bank || 0) >= 5000) {
+        responses.push("You have enough to buy a property! Type 'property list' now.")
+      }
+    }
+
+    return responses
   }
 
   /**

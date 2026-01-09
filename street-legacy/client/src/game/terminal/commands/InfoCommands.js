@@ -7,6 +7,8 @@ import { commandRegistry, CATEGORIES } from '../CommandRegistry'
 import { gameManager } from '../../GameManager'
 import { formatMoney } from '../../../utils/formatters'
 import { getCurrentTimeModifier } from '../../data/GameData'
+import { questlineManager } from '../../managers/QuestlineManager'
+import { progressionManager, PROGRESSION_BANDS } from '../../managers/ProgressionManager'
 
 /**
  * Render a text-based progress bar
@@ -397,6 +399,120 @@ export function registerInfoCommands() {
     },
     help: 'Check your financial status',
     usage: 'balance',
+    category: CATEGORIES.INFO,
+    minLevel: 1,
+  })
+
+  // ============================================
+  // PROGRESSION COMMANDS
+  // ============================================
+
+  // QUEST command - Show current quest progress
+  commandRegistry.register({
+    name: 'quest',
+    aliases: ['q', 'objective', 'mission'],
+    handler: async () => {
+      const progress = questlineManager.getQuestProgress()
+      const output = []
+
+      if (!progress.hasActiveQuest) {
+        if (progress.isOnboardingComplete) {
+          output.push({ text: ':: ONBOARDING COMPLETE ::', type: 'success' })
+          output.push({ text: '', type: 'system' })
+          output.push({ text: "  You've mastered the basics.", type: 'response' })
+          output.push({ text: "  The streets are yours to conquer.", type: 'response' })
+          output.push({ text: '', type: 'system' })
+          output.push({ text: "  Use 'goals' to see your current progression goals.", type: 'system' })
+        } else {
+          output.push({ text: ':: NO ACTIVE QUEST ::', type: 'system' })
+          output.push({ text: '', type: 'system' })
+          output.push({ text: '  Level up to unlock your next objective.', type: 'response' })
+        }
+        return { output }
+      }
+
+      const { quest, progress: curr, target, percent } = progress
+
+      // Quest header
+      output.push({ text: ':: CURRENT OBJECTIVE ::', type: 'system' })
+      output.push({ text: '', type: 'system' })
+      output.push({ text: `  ${quest.title}`, type: 'success' })
+      output.push({ text: `  "${quest.description}"`, type: 'response' })
+      output.push({ text: '', type: 'system' })
+
+      // Progress bar
+      const barLength = 20
+      const filled = Math.round((percent / 100) * barLength)
+      const empty = barLength - filled
+      const bar = '█'.repeat(filled) + '░'.repeat(empty)
+      output.push({ text: `  Progress: ${bar} ${percent}%`, type: percent >= 100 ? 'success' : 'response' })
+      output.push({ text: `  ${curr}/${target}`, type: 'response' })
+      output.push({ text: '', type: 'system' })
+
+      // Show hint
+      output.push({ text: '  Hint:', type: 'system' })
+      output.push({ text: `  ${quest.terminalHint || quest.sarahHint}`, type: 'handler' })
+
+      // Show rewards
+      if (quest.rewards) {
+        output.push({ text: '', type: 'system' })
+        const rewardParts = []
+        if (quest.rewards.xp) rewardParts.push(`+${quest.rewards.xp} XP`)
+        if (quest.rewards.cash) rewardParts.push(`+${formatMoney(quest.rewards.cash)}`)
+        output.push({ text: `  Rewards: ${rewardParts.join(', ')}`, type: 'npc_deal' })
+      }
+
+      return { output }
+    },
+    help: 'View your current quest progress',
+    usage: 'quest',
+    category: CATEGORIES.INFO,
+    minLevel: 1,
+  })
+
+  // GOALS command - Show progression band goals
+  commandRegistry.register({
+    name: 'goals',
+    aliases: ['progress', 'tier'],
+    handler: async () => {
+      const summary = progressionManager.getBandSummary()
+      const output = []
+
+      // Band header
+      output.push({ text: `:: ${summary.label.toUpperCase()} - LEVEL ${summary.level} ::`, type: 'success' })
+      output.push({ text: '', type: 'system' })
+
+      // Band progress
+      const { percent, current, total } = summary.progress
+      const barLength = 20
+      const filled = Math.round((percent / 100) * barLength)
+      const empty = barLength - filled
+      const bar = '█'.repeat(filled) + '░'.repeat(empty)
+      output.push({ text: `  Band Progress: ${bar} ${percent}%`, type: 'response' })
+      output.push({ text: '', type: 'system' })
+
+      // Goals
+      output.push({ text: '  Goals for this tier:', type: 'system' })
+      summary.goals.forEach(goal => {
+        output.push({ text: `    • ${goal}`, type: 'response' })
+      })
+      output.push({ text: '', type: 'system' })
+
+      // Next milestone
+      if (summary.nextMilestone) {
+        output.push({ text: `  Next Milestone (Level ${summary.nextMilestone.level}):`, type: 'system' })
+        output.push({ text: `    ${summary.nextMilestone.description}`, type: 'handler' })
+        output.push({ text: '', type: 'system' })
+      }
+
+      // Expected net worth
+      const { min, max } = summary.typicalNetWorth
+      output.push({ text: `  Typical Net Worth: ${formatMoney(min)} - ${formatMoney(max)}`, type: 'system' })
+
+      return { output }
+    },
+    help: 'View your progression goals',
+    usage: 'goals',
     category: CATEGORIES.INFO,
     minLevel: 1,
   })
