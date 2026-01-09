@@ -13,6 +13,7 @@ import { registerReputationCommands } from './ReputationCommands'
 import { registerDefenseCommands } from './DefenseCommands'
 import { registerOpportunityCommands } from './OpportunityCommands'
 import { registerSettingsCommands } from './SettingsCommands'
+import { registerMarketCommands } from './MarketCommands'
 import { terminalNPCManager } from '../../managers/TerminalNPCManager'
 import { heatEventSystem } from '../../managers/HeatEventSystem'
 import { playerReputationManager } from '../../managers/PlayerReputationManager'
@@ -63,6 +64,9 @@ export function registerAllCommands() {
 
   // Settings/Power user commands (theme, vim, macro, undo)
   registerSettingsCommands()
+
+  // Market commands (buy, sell, listings)
+  registerMarketCommands()
 
   // Initialize NPC manager for random messages
   terminalNPCManager.initialize()
